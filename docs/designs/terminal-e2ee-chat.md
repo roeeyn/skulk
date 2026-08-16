@@ -56,9 +56,9 @@ shipping:
   from your own stream.
 - It does **not** detect a relay that omits the same message from **everyone** — every
   client computes an identical code and nothing looks wrong.
-- Without the spoken challenge (A1b), it would not withstand an adaptive relay at all.
-  See the note under A1b; this is the single sharpest thing this design got wrong on the
-  first pass.
+- It works **because the code is keyed with a room-key-derived subkey the relay does not
+  have** (A1b). An unkeyed digest over relay-known values is forgeable in minutes, which
+  this design got wrong twice before getting right. Read A1b before touching it.
 
 ## Constraints
 
@@ -108,11 +108,18 @@ Codex cold-read the spec and premises. It contributed the continuity idea (A1), 
 `message_key` misnaming (A2), and argued for crypto-before-infrastructure (A7) against
 §25's ordering.
 
-Two rounds of independent adversarial review followed (6/10, then 7/10). Round 1 overturned
-this document's original justification for the recommended approach and caught a real spec
-bug (A8). Round 2 caught a **wrong security parameter** in the continuity feature that
-would have shipped a false guarantee — see A1b. Both corrections are recorded rather than
-quietly absorbed, because the reasoning is the useful part.
+Three rounds of independent adversarial review followed. Round 1 (6/10) overturned this
+document's original justification for the recommended approach and caught a real spec bug
+(A8). Round 2 (7/10) caught a **wrong security parameter** — an unkeyed 66-bit code priced
+against the wrong attack. Round 3, a focused cryptographic review, showed that the
+challenge-response repair was *also* wrong (33-bit security documented as 66) and supplied
+the construction now in A1b: key the code with the room key the relay does not have.
+
+All three corrections are recorded rather than quietly absorbed, because the reasoning is
+the useful part. One round-3 finding was **rejected**: it flagged A4's "~77 bits" as
+inconsistent with 11-bit word indices, having conflated §9.1's 2,048-word room-ID list with
+§9.2's 7,776-word Diceware list. Both numbers are correct; the note in A1b exists so nobody
+"fixes" them later.
 
 ## Approaches Considered
 
@@ -166,8 +173,16 @@ head_n   = SHA-256(head_{n-1} || E(msg_n))
 - `E(...)` is the **protocol crate's canonical length-prefixed binary encoding** — the same
   encoder §11.4 mandates for AAD — over `sequence`, `message_id` (raw 16 bytes),
   `sender_id`, `sender_username`, `received_at`, `ciphertext` (decoded bytes, not
-  Base64URL). Bare concatenation is forbidden; ambiguity here makes honest clients
-  disagree and the feature reports that as an attack. **Publish a test vector.**
+  Base64URL). **Publish a test vector.**
+- **Length-prefixing is a security requirement, not a tidiness one.** With bare
+  concatenation, `(sender_username="alice", ciphertext="XY")` and
+  `(sender_username="aliceXY", ciphertext="")` serialize identically, so a relay produces
+  two genuinely different transcripts with an identical head **at cost 1** — and because
+  the head is the HMAC input, the codes then match under *any* key. This is the one attack
+  A1b's keying does not stop. Say so in the test-vector rationale.
+- **`received_at` and `sender_username` need one canonical representation**, byte-identical
+  between the live `chat.message` frame and replayed history. Differing precision or
+  formatting between those two paths makes honest clients diverge.
 - **Fold everything displayed.** `sender_username` and `received_at` are relay-controlled
   and outside the AEAD (§16.4), so a fold binding only ciphertext would let a relay
   re-attribute every historical message and shift every timestamp with codes still
@@ -183,41 +198,71 @@ head_n   = SHA-256(head_{n-1} || E(msg_n))
   cap), not just decrypted text.
 - **Empty range MUST be refused** — it would otherwise print a universal constant.
 
-**A1b — The spoken challenge (this is load-bearing, not a flourish).**
+**A1b — The code is KEYED, not a public digest. This is the whole security argument.**
 
 ```
-code(s, e, challenge) = word_encode_66( SHA-256( head_e(s,e) || E(challenge) ) )
+k_check = HKDF-SHA-256(ikm = room_key, salt = UTF8(room_id),
+                       info = "e2e-chat/v1/checkpoint")
+
+code(s,e) = word_encode_66( HMAC-SHA-256(k_check, head_e(s,e) || E(s) || E(e)) )
 ```
 
-The first draft sized the code at 66 bits reasoning that a relay would need a
-second-preimage (2^66) to forge a match. **That was wrong, and it would have shipped a
-false guarantee.** The fold consumes `message_id`, `ciphertext`, `sender_username`,
-`received_at` — every input is a value the relay already holds, so the relay can compute
-any client's code exactly. It does not need to hit a target it cannot see: it controls
-**both** transcripts and needs only *some* pair `T_A ≠ T_B` whose codes agree. That is a
-birthday collision at ~**2^33** work — minutes on a laptop. Concretely: in a three-person
-room, drop message #7 from A's snapshot and #12 from B's, grinding drop/reorder choices on
-each side until the codes collide. Both see a plausible transcript, both are missing
-something, the codes match.
+This design went through two wrong answers before this one, and the reasoning is the
+useful part:
 
-The fix: **one party speaks a fresh random challenge before either reads a code.** The
-relay must commit to both transcripts before the challenge exists, so it cannot grind
-against it, and the bound returns to second-preimage (~2^66).
+*Wrong answer 1 — a public 66-bit digest.* The first draft sized the code at 66 bits
+reasoning that a relay would need a second preimage (2^66) to forge a match. **Every input
+to the fold is a value the relay already holds** — `message_id`, `ciphertext`,
+`sender_username`, `received_at` — so the relay can compute any client's code exactly. And
+it controls **both** transcripts, so it needs only *some* pair `T_A ≠ T_B` whose codes
+agree: a birthday/claw search at ~**2^33 per side** (~2^34 SHA-256 compressions), seconds
+to minutes on a laptop. Worse, the grinding variable is not drop/reorder choices (too few
+in a small room, and A1c forces renumbering) — it is **`received_at`**: relay-controlled,
+unauthenticated, sub-second precision, semantically invisible, and therefore unbounded free
+entropy at one compression per candidate.
 
-- The challenge is **three words from the §9.1 list (33 bits)**, freshly generated per
-  comparison by whoever initiates.
-- `/checkpoint` with no arguments generates and displays a challenge alongside the code and
-  the range, with instructions to read all three aloud.
-- `/checkpoint <start> <end> <challenge>` computes over a pinned range and a received
-  challenge. A single-argument form is undefined and MUST be rejected.
-- **Code encoding:** the leading 66 bits of the digest, big-endian, split into six 11-bit
-  indices into the 2,048-word §9.1 list.
+*Wrong answer 2 — a spoken random challenge.* Folding a freshly spoken challenge in before
+either party reads a code does force the relay to commit before the challenge exists. But
+security then equals `min(challenge entropy, code length)`, and the relay's best strategy
+is simply to **guess** the challenge: pick `c*`, run the same 2^34 birthday search with
+`c*` folded in, deliver the colliding pair, and win iff `c*` is the one spoken. With a
+3-word (33-bit) challenge that is 2^-33, not 2^-66 — 33 bits below the advertised number,
+with a free and *deniable* retry on every future comparison, since a wrong guess is
+indistinguishable from the "relay restart or eviction bug" mismatch this design
+deliberately teaches users to shrug at. Grinding candidate pairs in advance provably does
+not help: it costs 2^33× more for identical success probability.
+
+*The actual fix.* **The participants already share a secret the relay does not have.** The
+room key never reaches the relay — that is the entire point of §11.2's envelope. Keying the
+code with a room-key-derived subkey means the relay cannot compute any client's code,
+cannot grind toward a collision, cannot check offline whether a fork will be caught, and
+cannot exploit `received_at` entropy no matter how much of it exists. Its best remaining
+strategy is a blind speculative fork, caught at **2^-66** by the first comparison anyone
+performs. Six spoken words, no challenge, no ordering ritual, no RNG dependency, no
+`E(challenge)` interop hazard. Cost: one HKDF label and one HMAC. No wire change; A1e is
+untouched. Revealing 66-bit PRF outputs on relay-known inputs leaks nothing about
+`k_check`.
+
+- **Code encoding:** leading 66 bits of the HMAC, big-endian, split into six 11-bit indices
+  into the **2,048-word §9.1 room-ID list**. *(§9.1's 2,048-word list and §9.2's 7,776-word
+  Diceware list are different lists — 11 bits/word and ~12.9 bits/word respectively. A4's
+  "~77 bits" for a six-word §9.2 passphrase and this 11-bit encoding are both correct. Do
+  not "reconcile" them.)*
+- **Consider a phonetically-distinct list for the spoken code** (PGP/S-KEY style). §9.1's
+  list is optimized for typing, not for being heard over a phone; mishearings produce false
+  mismatches, and false mismatches produce habituation.
 - **Rendered distinctly from a passphrase** — dot-separated with a `check:` prefix
   (`check: harbor.lentil.dusk.maple.quartz.wren`) — because a passphrase must never be
-  spoken to a third party and this code exists to be spoken. Two six-word strings that look
-  identical is a footgun.
-- SECURITY.md documents the bound and states plainly that **without the challenge the
-  property does not hold**.
+  spoken to a third party and this code exists to be spoken.
+- **Range is bound explicitly** in the HMAC so a range mismatch is diagnosable rather than
+  presenting as a generic code mismatch. The client MUST distinguish "your ranges differ"
+  from "codes differ over the same range" — the former is the common honest case (§15
+  eviction, different join times) and must not read as an attack.
+- **Full coverage in a room of n requires a spanning tree of n−1 comparisons.** State this
+  in SECURITY.md rather than implying one comparison covers the room.
+- SECURITY.md documents the 2^-66 blind-fork bound and states that the property depends on
+  the room key remaining secret — a participant who leaks the room key also destroys
+  checkpoint integrity, since they can then compute forged codes.
 
 **A1c — Local contiguity check (partner-free).** Verify relay-assigned `sequence` values
 form a strictly-increasing contiguous run across the retained window. This is what powers
@@ -278,9 +323,11 @@ document as unauthenticated relay metadata not covered by the AAD. **This increa
 `encoded_size`, which feeds §8's history byte accounting** — account for it.
 
 **A9 — Test amendments.** §22.1 adds: fold determinism against the published test vector,
-sequence-ascending ordering, dedup-before-fold, rejected-frame exclusion, range-anchored
-recomputation, empty-range refusal, word-mapping of the 66-bit code, and the A0 rename
-(assert no `my_cmd` string survives in any HKDF/AAD constant). §22.2 adds a `TestRelay` with
+canonical-encoding unambiguity (the `alice`/`aliceXY` case in A1a must produce different
+heads), sequence-ascending ordering, dedup-before-fold, rejected-frame exclusion,
+range-anchored recomputation, empty-range refusal, word-mapping of the 66-bit code,
+`k_check` domain separation from `room_message_key`, and the A0 rename (assert no `my_cmd`
+string survives in any HKDF/AAD constant). §22.2 adds a `TestRelay` with
 drop / reorder / fork hooks; a test that relay-visible frames contain **no** chain value,
 head, or code (A1e's central MUST NOT); a self-suppression test; and an A8 test that history
 replayed after the sender disconnects still attributes correctly.
@@ -308,10 +355,11 @@ history, and the client SHOULD visually distinguish replayed history from live m
 `docs/design/tui-wireframe-v1.html` (rendered: `tui-wireframe-v1.png`) sketches the states
 not already specified as console transcripts in §6.1–6.3. Layout and hierarchy only.
 
-**The wireframe predates A1b and A1a's "fold everything displayed" decision.** It still
-shows a challenge-free checkpoint and claims "you were served the same transcript." Update
-it alongside step 6: add the spoken challenge, distinguish the code from a passphrase, and
-soften the claim to "the same messages, in the same order, with the same attribution."
+**The wireframe predates A1b's keyed construction.** Its checkpoint panel claims "you were
+served the same transcript," which overclaims. Update it alongside step 7: render the code
+distinctly from a passphrase (`check:` prefix, dot separators), add the ranges-differ case,
+and soften the claim to "the same messages, in the same order, with the same attribution."
+The wireframe needs no challenge line — A1b removed it.
 
 Decisions worth keeping:
 
@@ -330,8 +378,8 @@ implementer following the spec today rejects `/checkpoint`. Add:
 
 | Command | Behavior |
 | --- | --- |
-| `/checkpoint` | Generate a fresh challenge; print it, the range, and the code for all retained history. Local only. |
-| `/checkpoint <start> <end> <challenge>` | Print the code over a pinned range using a received challenge. Local only. A single-argument form is rejected. |
+| `/checkpoint` | Print the retained range and its code. Local only; nothing is sent to the relay. |
+| `/checkpoint <start> <end>` | Print the code over a pinned range, so two people can compare the same window. Local only. A single-argument form is rejected. |
 
 `/help` gains one line. Per §10.3 the `/help` privacy note MUST NOT let the feature inflate
 the security claim.
@@ -349,17 +397,20 @@ the security claim.
 
 §23's checklist stands as written, plus:
 
-- [ ] Two honest clients that pin the same range **and the same spoken challenge** print
-      matching codes; codes diverge when a `TestRelay` drops, reorders, or forks stored
-      messages for one of them.
+- [ ] Two honest clients that pin the same range print matching codes; codes diverge when a
+      `TestRelay` drops, reorders, or forks stored messages for one of them; and a client
+      with a different range is told *"ranges differ"* rather than shown a mismatch.
+- [ ] A client that does not hold the room key cannot compute a valid code (assert the
+      code is a function of `k_check`, not a public digest).
 - [ ] A client detects suppression of its own sent message, within the A1d deadline, with no
       comparison partner.
 - [ ] A client detects a `sequence` gap locally via A1c.
 - [ ] No relay-visible frame contains a chain value, head, or code.
 - [ ] SECURITY.md names the three-input offline-recovery path (A4), states the pinned
       dependency is unaudited, and states the continuity feature's exact limits — including
-      that a relay omitting a message from **everyone** is undetected, and that the property
-      depends on the spoken challenge.
+      that a relay omitting a message from **everyone** is undetected, that full coverage in
+      a room of n needs n−1 comparisons, and that checkpoint integrity depends on the room
+      key staying secret.
 - [ ] A second person installs the binary and joins a room in under a minute **via the
       one-liner install path**, given a relay URL (A10: no default relay), with no Rust
       toolchain present.
@@ -402,7 +453,7 @@ Supersedes §25's ordering and closing line (A7).
    at step 8, when the features they govern exist.
 5. **Spec infrastructure:** multi-room state, TTL and expiry sweep, full history snapshot,
    capacity bounds, history eviction, backpressure, presence, random usernames.
-6. **Verified continuity (A1):** fold, challenge, contiguity check, self-suppression check,
+6. **Verified continuity (A1):** fold, keyed code, contiguity check, self-suppression check,
    `/checkpoint` in the line UI, plus A9's `TestRelay` harness and the published test vector.
    *Continuity UI (status bar, banner) is built once, in step 7 — not twice.*
 7. **Ratatui TUI** including the continuity UI, Diceware generation, full command set, and
@@ -426,22 +477,25 @@ whether the pinned version is RFC 9807-conformant rather than draft-conformant. 
 spec says to stop and document the blocker if OPAQUE cannot be integrated. Find out on day
 one, not on day nine.
 
-## Reviewer Concerns (unresolved after 3 review rounds)
+## Reviewer Concerns (recorded, not closed)
 
-Two rounds of adversarial review ran; scores 6/10 then 7/10. The following are recorded
-rather than closed, because closing them requires building the thing:
+Three adversarial review rounds ran. The following need building, not more reviewing:
 
-- **The continuity feature has now been redesigned twice under review** (relay-stored →
-  client-local; unchallenged → challenge-response). It is the least-settled part of this
-  design and the part most likely to need a third revision once real code exists. Treat
-  step 6 as design work, not implementation of a settled spec, and re-review A1 before
-  writing SECURITY.md's claims about it.
-- **The wireframe is behind the design** (predates A1b) and is explicitly scheduled for
-  update at step 7. Do not treat it as the source of truth for checkpoint UX.
-- **`/checkpoint`'s ergonomics are unproven.** Reading a range, a three-word challenge, and
-  a six-word code aloud is a lot of ceremony. It may not survive contact with real use, and
-  the honest fallback is to keep A1c and A1d (both partner-free, both cheap) and drop the
-  comparison ritual if nobody performs it.
+- **The continuity feature was redesigned three times under review** (relay-stored →
+  client-local unkeyed → keyed HMAC). The current construction is the first one whose
+  security argument survives scrutiny, and it is also the simplest. That is usually a good
+  sign, but it has not been implemented or independently re-reviewed in its final form.
+  **Do not write SECURITY.md's claims about A1 until after step 6 exists**, and get a
+  cryptographer's eye on A1b if one is available.
+- **The wireframe is behind the design** and is scheduled for update at step 7. Do not
+  treat it as the source of truth for checkpoint UX.
+- **`/checkpoint`'s ergonomics are unproven.** Six words read over a phone, plus pinning a
+  matching range, is real ceremony. If nobody performs it, the honest fallback is to keep
+  A1c and A1d — both partner-free, both cheap, both catching real failures — and drop the
+  comparison ritual rather than pretending it is used.
+- **False mismatches are the dominant real-world failure mode**, not attacks. Eviction and
+  differing join times mean two clients rarely share a window. The ranges-differ path
+  (A1b) is what keeps this from training users to ignore the feature.
 
 ## What I noticed about how you think
 
