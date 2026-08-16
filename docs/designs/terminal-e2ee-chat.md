@@ -6,23 +6,29 @@ Repo: roeeyn/e2e-chat
 Status: DRAFT
 Mode: Builder
 
+> **Normative sections:** Amendments (A1–A9), Open Questions, Success Criteria,
+> Distribution Plan, Next Steps. An implementer follows those.
+> **Context sections:** everything else — Problem Statement, What Makes This Cool,
+> Constraints, Premises, Landscape, Cross-Model Perspective, Approaches Considered,
+> The Assignment, What I noticed. Background, not requirements.
+
 ## Problem Statement
 
 Build a minimal terminal-based group chat with real end-to-end encryption, per the
-775-line MVP spec at `~/Downloads/terminal_chat_mvp_spec.md` (working command `my_cmd`,
-Rust, single binary with `create` / `join` / `serve`).
+775-line MVP spec at `~/Downloads/terminal_chat_mvp_spec.md` (Rust, single binary with
+`create` / `join` / `serve`).
 
 The session did not originate the idea — the builder arrived with a finished spec and
 asked for a review. So the design work here is not "what should this be" but three
 narrower questions: is the spec sound, what is the right build order, and is anything
-missing that gets structurally expensive after protocol v1 freezes.
+missing.
 
 Verdict on the spec: sound and unusually rigorous. It has a real threat model (§10),
 non-goals that resist scope creep (§4), normative MUST/MUST NOT language, race-safety
 requirements (§21), and a gradeable acceptance checklist (§23). The crypto design is
 appropriately boring: OPAQUE for password auth, room key wrapped under the OPAQUE
 `export_key`, XChaCha20-Poly1305 with domain-separated AAD, no invented constructions.
-This document records the amendments, not a rewrite.
+This document records amendments, not a rewrite.
 
 ## What Makes This Cool
 
@@ -31,22 +37,26 @@ or ship the key inside the invite link. This spec forbids both (§27) and pays t
 integration cost to get it right. That is the project's identity: **the terminal chat
 that did the password part properly.**
 
-The addition this session makes: **verified continuity.** Each stored ciphertext commits
-to its predecessor via a hash chain, and a `/checkpoint` command prints a short code that
-friends compare out loud. If the relay dropped, reordered, or forked history, the codes
-diverge. It closes a hole the spec's own §10.2 currently concedes ("the relay can omit,
-delay, duplicate, reorder, or delete messages"), and it is the moment that makes a demo
-land: *proof, visible in the terminal, that the server didn't lie to you.*
+The addition this session makes is **verified continuity**: each client folds a hash over
+the history the relay delivered, and `/checkpoint` prints a code that two people compare
+out loud. If the relay served them different transcripts, the codes diverge.
+
+Stated precisely, because the honest version is the only version worth shipping: this does
+**not** close §10.2. It makes a *subset* of §10.2 detectable, and only between people who
+actually compare out of band. A relay that omits the same message from **everyone**
+produces identical codes on every client and is not detected at all. What it catches is
+divergence between participants — forks, per-client reordering, selective suppression.
+That is a meaningful and previously undetectable class of attack, and it is less than
+"proof the server didn't lie."
 
 ## Constraints
 
 - Learning/OSS build, not a business. Success is a correct tool the builder and a few
   friends actually use.
-- Single binary, three subcommands, self-hostable, cross-platform (Linux/macOS/Windows).
+- Single binary, three subcommands, self-hostable, cross-platform.
 - Relay is in-memory only. No database, no disk, no persistence. Restart wipes everything.
 - No invented cryptography — maintained libraries and standard protocols only (§11.1).
 - Capacity bounds instead of rate limiting (§19), an intentional and documented v1 omission.
-- Protocol v1 wire format freezes when the first binary is released.
 
 ## Premises
 
@@ -55,209 +65,277 @@ All four confirmed by the builder:
 1. **Learning/OSS build.** Success = a correct, honest, self-hostable tool used by the
    builder and a few friends. Not growth, not revenue.
 2. **Human-memorable password + separate word-based room ID is the core UX bet**, worth
-   OPAQUE's integration complexity. The simpler croc-style alternative (one high-entropy
-   invite token carrying both locator and key) is consciously rejected — it is
-   cryptographically stronger against the relay but unmemorable and unspeakable over a
-   phone call, which defeats the point.
-3. **Against the relay operator, confidentiality equals password strength.** The operator
-   can run an offline dictionary attack against their own OPAQUE registration record; with
-   a weak 12-byte password they recover `export_key`, unwrap the room key, and decrypt
-   retained history. SECURITY.md must state this specific collapse explicitly, not just
-   the generic "password guessing" line in §10.3.
-4. **Distribution moves into MVP scope.** GitHub Releases binaries for all three platforms
-   plus an install one-liner. A chat tool the second person cannot install in a minute is
-   a room with one person in it.
+   OPAQUE's integration complexity. The croc-style alternative (one high-entropy invite
+   token carrying both locator and key) is consciously rejected — cryptographically
+   stronger against the relay, but unmemorable and unspeakable over a phone call, which
+   defeats the point.
+3. **Confidentiality against whoever holds the room's OPAQUE record equals password
+   strength.** See A4 for the corrected attacker framing.
+4. **Distribution moves into MVP scope.** Binaries plus an install path. A chat tool the
+   second person cannot install in a minute is a room with one person in it.
 
 ## Landscape
 
-- `opaque-ke` v4.0.1 (Meta/facebook) is RFC 9807-compliant — the OPAQUE RFC was finalized
-  July 2025 — and was audited by NCC Group in 2021, an audit WhatsApp sponsored for its
-  E2EE backups. **The spec's stop-condition in §11.1 ("no maintained RFC 9807 library →
-  halt and document the blocker") will not trigger.** This was the single load-bearing
-  unverified dependency.
-- **The `export_key` mechanism the design depends on is confirmed in the upstream API**, not
-  assumed. `ClientRegistration::finish` and `ClientLogin::finish` both return an
-  `export_key`, and they are equal when the same password is used — the docs ship an
-  `assert_eq!(client_registration_finish_result.export_key,
-  client_login_finish_result.export_key)` example. The documented purpose is verbatim the
-  spec's design: "can be used to encrypt client-side secrets, ensuring they remain hidden
-  from the server." The room-key envelope in §11.2 is the intended use of this API, not a
-  clever repurposing of it.
-- Closest prior art: [enchat](https://github.com/sudodevdante/enchat) — E2EE, ephemeral,
-  self-hosted terminal chat, no accounts or history. Same shape, weaker crypto story.
-  [SimpleX CLI](https://simplex.chat/docs/cli.html) is a different animal: double ratchet,
-  X3DH, identity-oriented, far heavier.
-- Median quality in this space is low (one popular result uses 3DES). The bar for "did the
-  crypto honestly" is genuinely low and worth clearing loudly.
+- `opaque-ke` v4.0.1 (Meta/facebook) is reported RFC 9807-compliant — the OPAQUE RFC was
+  finalized July 2025. **The spec's §11.1 stop-condition is expected not to trigger,
+  pending the spike.** RFC 9807 conformance of the pinned version must be confirmed during
+  the spike, since the crate historically tracked the CFRG draft and the RFC introduced
+  protocol changes.
+- **The `export_key` mechanism is confirmed in the upstream API.**
+  `ClientRegistration::finish` and `ClientLogin::finish` both return an `export_key` and
+  they are equal for the same password — upstream ships an `assert_eq!` example. The
+  documented purpose is verbatim the spec's design: "can be used to encrypt client-side
+  secrets, ensuring they remain hidden from the server." §11.2's room-key envelope is the
+  intended use of this API, not a clever repurposing.
+- **Audit status, stated carefully.** NCC Group reviewed the crate in 2021 (findings in
+  v0.5.0, fixes in v1.2.0), sponsored by WhatsApp. That audit covered a 2021-era version,
+  **not v4.0.1.** Per §4 ("no claims that the implementation is audited"), SECURITY.md
+  MUST say: *an earlier version of this dependency received an independent review in 2021;
+  the pinned version has not been audited, and this project has not been audited.*
+- Closest prior art: [enchat](https://github.com/sudodevdante/enchat) — same shape, weaker
+  crypto story. [SimpleX CLI](https://simplex.chat/docs/cli.html) is a different animal:
+  double ratchet, X3DH, identity-oriented. Median quality in this space is low (one
+  popular result uses 3DES).
 
 ## Cross-Model Perspective
 
-Codex ran a cold read of the spec summary, landscape, and premises without seeing the
-conversation. Its contributions, and how they were resolved:
+Codex cold-read the spec summary, landscape, and premises. It contributed the verified-
+continuity idea (A1), caught the `message_key` misnaming (A2), and argued for building
+crypto before infrastructure (A7) against the spec's §25 ordering. It flagged "only the
+envelope is stored" as a defect; that was an artifact of the summary it read, but the
+ambiguity in §11.2 is real and became A3. Its read of premise 2 — the builder is excited
+by "making serious cryptography feel like an ordinary human ritual" — reinforced rather
+than challenged it. No premise was revised.
 
-- **Verified continuity rooms (adopted, became Approach C).** "Each client maintains a
-  hash-chain of ciphertext history and periodically shows a short room checkpoint code.
-  When friends compare codes out-of-band, they can detect relay history forks, insertion,
-  deletion, or reordering."
-- **`message_key` is misnamed (adopted as amendment A2).** §11.4 says "derive a 32-byte
-  message key once per joined client session," but the inputs are `room_key`, `room_id`,
-  and a constant `info` — every client in every session derives the same key. It is a
-  stable *room* message key. The wording risks an implementation agent inventing session
-  context to satisfy the word "session," which would silently break interop between clients.
-- **"Only the envelope is stored" reads ambiguously (adopted as amendment A3).** Codex
-  flagged this as a flaw; it was reading a compressed summary, and §13 does correctly store
-  `opaque_registration_record` and `encrypted_room_key_envelope` as separate fields plus a
-  `ServerState.opaque_setup_secret`. Not a defect — but §11.2 step 6 read in isolation
-  ("Store only the resulting nonce and ciphertext as the room-key envelope") invites exactly
-  Codex's misreading, so it gets a cross-reference to §13.
-- **Build crypto before infrastructure (adopted as Approach C's ordering).** Its weekend
-  milestone collapses spec §25 steps 1-6 and defers the TUI. This is a real disagreement
-  with §25, which builds room lifecycle and TTL before touching crypto — and Codex is right
-  for a learning project: the crypto is both the risky part and the fun part, while TTL
-  logic is work the builder already knows how to write.
-- **On the emotional core**, Codex independently identified premise 2 as the tell: the
-  builder is excited by "making serious cryptography feel like an ordinary human ritual —
-  'here's the room name; here's the phrase,' not a scary key blob." This reinforced rather
-  than challenged the premise. No premise was revised.
+An independent adversarial reviewer then read this document against the source spec and
+returned 19 issues at 6/10. Its central finding **overturned the original justification
+for the recommended approach** and is recorded honestly in Recommended Approach below.
+It also caught a genuine spec bug this document had vouched past (A8).
 
 ## Approaches Considered
 
 ### Approach A: Spec Order (as written)
 Follow §25 literally — workspace/CI, room lifecycle + TTL, WebSocket transport, then
 OPAQUE, then messages, then TUI. **Rejected:** leaves the only genuine unknown
-(opaque-ke integration) unproven until step 4 of 10, and front-loads the least
-interesting work for a project whose purpose is learning.
+(opaque-ke integration) unproven until step 4 of 10.
 
 ### Approach B: Crypto-First Vertical Slice
-Prove the OPAQUE + room-key + XChaCha round trip end-to-end on one hardcoded room with a
-line-based UI, then layer on lifecycle, bounds, TUI, and docs. **Rejected:** correct
-ordering, but leaves the continuity chain out of protocol v1, where adding it later means
-a breaking v2 for anyone already running a released binary.
+Prove the OPAQUE + room-key + XChaCha round trip end-to-end, then layer on lifecycle,
+bounds, TUI, and docs.
 
 ### Approach C: Crypto-First + Verified Continuity — CHOSEN
-Approach B plus the hash-chained history and `/checkpoint` command, designed into protocol
-v1 rather than bolted on.
+Approach B plus the continuity chain and `/checkpoint`.
 
 ## Recommended Approach
 
-**Approach C.** Two reasons, both load-bearing:
+**Approach C, with its original justification retracted.**
 
-1. **Crypto first kills the real risk early.** Everything after the OPAQUE round trip is
-   work the builder already knows how to do (async Rust, WebSockets, TTL sweeps, bounded
-   queues). Proving `opaque-ke` v4 registration/login and envelope unwrap on day one turns
-   an unknown into a solved problem before three weeks of scaffolding depend on it.
-2. **The continuity chain is cheap now and expensive later.** It adds one field to
-   `StoredMessage` and one in-room command. After protocol v1 ships in a binary, the same
-   change is a breaking v2.
+The argument for C over B was: the chain adds a field to `StoredMessage`, so it must land
+before protocol v1 freezes or it becomes a breaking v2. **That argument is wrong**, and the
+adversarial reviewer is owed the correction.
 
-### Amendments to the spec
+A relay-stored `prev_hash` is worthless — the relay is precisely the party the feature
+exists to catch, so a chain value it computes and serves proves nothing (issue 5). And a
+sender cannot compute `prev_hash` either: senders do not know their relay-assigned
+`sequence` at encrypt time, and if each sender chains from its own last-seen message,
+concurrent sends produce a DAG rather than a chain, so two honest clients diverge with an
+honest relay (issue 1).
 
-These are the deltas from `terminal_chat_mvp_spec.md`. Everything not listed stands as written.
+The construction that works is **client-local**, and it touches no wire type at all. Which
+means continuity is purely additive: it can ship after the MVP with no protocol v2, no
+breaking change, and no freeze deadline. C survives as the chosen approach because the
+feature is still worth building and still shapes the UI — but it moves after the MVP core
+(Next Steps step 6), and the urgency argument is withdrawn.
 
-- **A1 — Verified continuity (new).** `StoredMessage` gains `prev_hash`. Each stored
-  ciphertext commits to its predecessor; `/checkpoint` prints a short truncated digest of
-  the current chain head for out-of-band comparison. Chain semantics under history eviction
-  must be defined before v1 freezes (see Open Questions).
-- **A2 — Rename `message_key` → `room_message_key`** in §11.4, the protocol constants, and
-  `docs/protocol-v1.md`. It is derived once per room, not per session; the current name
-  invites an interop-breaking misimplementation.
-- **A3 — Cross-reference §11.2 step 6 to §13.** Make explicit that the relay stores the
-  OPAQUE registration record *and* the key envelope as separate fields, plus the
-  server-level OPAQUE setup secret. A reader of §11 alone can conclude the envelope is all
-  that persists.
-- **A4 — SECURITY.md states the operator-offline-attack collapse explicitly** (premise 3).
-  Generic "password guessing" wording is not enough: name the specific path — operator runs
-  offline dictionary attack on their own record → `export_key` → room key → all retained
-  history. Note that a generated 6-word Diceware passphrase (~77 bits) makes this
-  infeasible, and that a 12-byte user-chosen password may not.
-- **A5 — Client nudges toward generated passphrases.** Given A4, the create flow should make
-  the generated passphrase the path of least resistance rather than a fallback for a blank
-  entry.
-- **A6 — Distribution enters MVP deliverables** (premise 4). See Distribution Plan.
-- **A7 — Build order follows Approach C, superseding §25.** See Next Steps.
+### Amendments
+
+Deltas from `terminal_chat_mvp_spec.md`. Everything not listed stands as written.
+Per §27, **A1–A9 MUST be folded into the spec as v1.1 before implementation begins.** The
+spec remains the single authority an implementer follows; this document does not compete
+with it. (If they are instead recorded in `docs/deviations.md`, that file controls.)
+
+**A0 — The binary is `e2e-chat`.** Closes the former open question, which was blocking:
+the name is baked into HKDF info strings and AAD (`my_cmd/v1/room-key-wrap`,
+`my_cmd/v1/messages`, `my_cmd/v1/room-key/`), the `MY_CMD_SERVER` env var, and the install
+one-liner. Deciding it later means a mechanical rename across wire-format constants
+mid-build. All protocol strings become `e2e-chat/v1/...`; the env var becomes
+`E2E_CHAT_SERVER`.
+
+**A1 — Verified continuity (client-local).**
+- The chain is a **receiver-side fold over the relay-delivered order**, computed after
+  `message_id` deduplication (§15):
+  `head_n = SHA-256(head_{n-1} || message_id_n || ciphertext_n)`, `head_0` = 32 zero bytes.
+- **The relay MUST NOT compute, store, or forward any chain value.** No new field in
+  `StoredMessage`, no new wire type, no AAD change. It is client-local state.
+- `/checkpoint` prints `start_seq`, `end_seq`, and a code derived from `head` at
+  `end_seq`. Comparison is defined over the **intersection** of both parties' ranges, and
+  `/checkpoint <start> <end>` lets two people pin the same window.
+- **Code encoding:** six words from the existing 2,048-word room-ID list = **66 bits**
+  retained from the SHA-256 head. Six words rather than five (55 bits) to clear a 64-bit
+  floor, because truncation length is a security parameter: the relay cannot forge
+  ciphertext, but it can choose which subset and ordering of real messages to show each
+  client and grind subsets offline for a code collision. SECURITY.md documents this bound.
+  Reusing the room-ID word list keeps the code speakable, which is its entire purpose.
+- **Self-suppression check, needs no comparison partner:** a client MUST verify that its
+  own sent messages appear in its own received stream, which detects unilateral
+  suppression locally and immediately.
+- **Mismatch behavior:** a persistent local warning banner plus an in-transcript marker at
+  the break. **Never disconnect** — a disconnect would hand the relay control of liveness.
+  `chain_mismatch` is a local-only condition and MUST NOT be added to §17's wire error
+  codes.
+
+**A2 — Rename `message_key` → `room_message_key` in source and prose.** It is derived once
+per room from `room_key` + `room_id` + a constant `info`, so every client in every session
+derives the same value; "once per joined client session" (§11.4) invites an implementer to
+add session context and silently break interop. The term appears in §5, §10.1, §11.4, §13,
+§18.1, §20, and §22.1 — all seven. **Wire constants are unchanged:** the HKDF info string
+is `e2e-chat/v1/messages` and contains no such token. This is a documentation and source
+rename only.
+
+**A3 — Cross-reference §11.2 step 6 to §13.** Make explicit that the relay stores the
+OPAQUE registration record *and* the key envelope as separate fields, plus the
+server-level OPAQUE setup secret. A reader of §11 alone concludes the envelope is all that
+persists.
+
+**A4 — SECURITY.md states the offline-recovery path explicitly, scoped to record-holders
+not just operators.** Anyone who obtains a room's OPAQUE registration record and key
+envelope — the operator, but equally a memory dump, a compromised host, or a subpoenaed
+snapshot — can run an offline dictionary attack, recover `export_key`, unwrap the room
+key, and decrypt all retained history. Against that party, confidentiality **is** password
+strength. A generated 6-word Diceware passphrase (~77 bits) makes this infeasible; a
+12-byte user-chosen password may not. §10.3's generic "password guessing" line does not
+convey this.
+
+**A5 — Invert the create prompt so the generated passphrase is the default.** Concretely:
+`Press enter to generate a strong passphrase, or type your own:`, displaying the candidate
+passphrase above the prompt (see wireframe). Typing becomes the deliberate act rather than
+the default. §22.1 MUST cover the enter-to-accept path. This follows from A4.
+
+**A6 — Distribution enters MVP deliverables.** See Distribution Plan.
+
+**A7 — Build order follows Approach C, superseding §25.** See Next Steps.
+
+**A8 — `StoredMessage` gains `sender_username` (a real spec bug).** §16.4 requires
+`sender_username` on stored and forwarded chat messages, but §13's `StoredMessage` has no
+such field, and usernames are connection-scoped (§6.4) and vanish when a participant
+disconnects. History replayed to a new joiner (§6.2 step 9, "Loaded 23 retained messages")
+therefore has no attributable sender for any departed participant. Capture the username at
+store time and document it as unauthenticated relay metadata, not covered by the AAD.
+
+**A9 — Test amendments.** §22.1 adds: fold determinism, dedup-before-fold ordering, range
+checkpoint over a pinned window, and eviction-boundary behavior. §22.2 adds a `TestRelay`
+with drop / reorder / fork hooks — the continuity success criteria are unverifiable
+without fault injection, and §22 currently has none.
 
 ### Terminal wireframe
 
-`docs/design/tui-wireframe-v1.html` (rendered: `tui-wireframe-v1.png`) sketches the four
-states that are not already specified as console transcripts in spec §6.1-6.3: chat steady
-state with ambient chain health in the status bar, `/checkpoint` matching, `/checkpoint`
-broken, and the inverted create flow from A5. Layout and hierarchy only — not visual design.
+`docs/design/tui-wireframe-v1.html` (rendered: `tui-wireframe-v1.png`) sketches the states
+not already specified as console transcripts in §6.1–6.3: chat steady state with ambient
+chain health in the status bar, `/checkpoint` matching, `/checkpoint` broken, and the A5
+create flow. Layout and hierarchy only, not visual design.
 
 Decisions worth arguing with:
 
-- **Chain health lives in the status bar, not in the transcript.** It is ambient state; the
+- **Chain health lives in the status bar, not the transcript.** It is ambient state; the
   user should never have to ask whether it is still OK.
-- **The checkpoint code is two 4-character halves** because its entire purpose is being read
-  aloud over a phone call.
-- **The broken-chain message says what to do, not what happened**, and deliberately avoids
-  "you are being attacked" — a relay restart or an eviction-boundary bug produces the same
-  signal, and crying wolf destroys the feature's credibility.
-- **The checkpoint output names its window** ("covers 24 messages, all retained history"),
-  which is how Open Question 1 surfaces to the user rather than being hidden.
+- **The code is read aloud**, which is why it is words from the room-ID list rather than
+  hex or base32.
+- **The broken-chain message says what to do, not what happened**, and avoids "you are
+  being attacked." A relay restart or an eviction-boundary bug produces the identical
+  signal, and a security feature that cries wolf is ignored within a week.
+- **Checkpoint output names its own window**, which is how the range problem surfaces to
+  the user instead of silently producing mismatches between honest clients.
+
+### Command surface (§6.3 amendment)
+
+§6.3's table is normative and states "Unknown commands MUST display a local error," so an
+implementer following the spec today rejects `/checkpoint`. Add to the table:
+
+| Command | Behavior |
+| --- | --- |
+| `/checkpoint [start] [end]` | Print the local continuity code for the given range (default: all retained history), with `start_seq` and `end_seq`. Local only; nothing is sent to the relay. |
+
+`/help` gains one line for it, and per §10.3 the privacy note in `/help` must not let the
+feature inflate the security claim.
 
 ## Open Questions
 
-1. **Chain semantics under eviction.** When the relay evicts the oldest messages to satisfy
-   the 1000-message / 4MiB caps (§15), the chain loses its root. Options: checkpoint over
-   the surviving window only and display the window boundary; or have the relay retain
-   evicted head digests. Must be settled before protocol v1 freezes. Recommendation: window
-   checkpoint, and be explicit in the UI that it covers retained history only.
-2. **What `/checkpoint` proves, precisely.** It detects a relay that forks or rewrites
-   history *between clients who compare codes*. It does not prove the relay showed everyone
-   everything, and it does not defend against a participant who shares the room key. This
-   needs its own SECURITY.md subsection written with the same honesty as §10.3 — the
-   feature is worthless if it inflates the security claim.
-3. **Does the chain live inside or outside the AEAD?** Cleanest is including `prev_hash` in
-   the message AAD so tampering breaks authentication directly; that changes the AAD
-   encoding in §11.4 and must be decided before any test vectors are published.
-4. **Command name.** The spec still says `my_cmd`. The repo is `e2e-chat`. Pick the real
-   binary name before the first release, since it lands in the install one-liner and in
-   protocol constant strings (`my_cmd/v1/...`), which are baked into the wire format.
+1. **Eviction and the fold's start boundary.** When the relay evicts old messages to
+   satisfy the 1000-message / 4MiB caps (§15), clients that were present hold a longer
+   history than clients that join afterward. The range-explicit `/checkpoint` handles
+   comparison, but the client must decide whether to re-fold from its own retained window
+   or track the evicted prefix separately. Recommendation: fold over the client's own
+   retained window and always display the boundary.
+2. **Default public relay: operate one, or none?** §7.2 requires a build-time default
+   relay URL. With no default, the "second person joins in under a minute" criterion fails
+   — they need `--server`, and someone must stand up a relay first. With a default, §19's
+   deliberate absence of rate limiting means an advertised, unauthenticated, unthrottled
+   relay ships next to a one-liner installer. Recommendation: **no default relay for v1.**
+   The README requires `--server`, the success criterion below is amended accordingly, and
+   a public relay waits until §26's rate limiting lands.
+3. **Notarization budget.** See Distribution Plan — this is a money/time question only the
+   builder can answer.
 
 ## Success Criteria
 
-The spec's §23 acceptance checklist stands as written, plus:
+The spec's §23 checklist stands as written, plus:
 
-- [ ] `/checkpoint` prints matching codes on two honest clients, and diverging codes when a
-      test relay drops or reorders a stored message.
-- [ ] SECURITY.md names the operator offline-dictionary path explicitly (A4).
-- [ ] A second person installs the binary and joins a room in under a minute, from the
-      install one-liner alone, with no Rust toolchain present.
-- [ ] Protocol constants and docs use `room_message_key` (A2).
+- [ ] Two honest clients that pin the **same range** via `/checkpoint <start> <end>` print
+      matching codes; codes diverge when a `TestRelay` drops, reorders, or forks stored
+      messages for one of them.
+- [ ] A client detects suppression of its own sent message without any comparison partner.
+- [ ] SECURITY.md names the offline record-holder recovery path (A4) and the continuity
+      feature's exact limits — including that a relay omitting a message from everyone is
+      undetected.
+- [ ] SECURITY.md states the pinned dependency version is unaudited.
+- [ ] A second person installs the binary and joins a room in under a minute, given a
+      relay URL, with no Rust toolchain present.
+- [ ] Docs and source use `room_message_key`; wire constants are unchanged.
+- [ ] `StoredMessage` carries `sender_username`, and history replayed after the sender
+      disconnects still attributes correctly.
 
 ## Distribution Plan
 
-Moved into MVP scope per premise 4.
+Per premise 4 / A6.
 
-- **GitHub Releases** with prebuilt binaries for `x86_64-linux`, `aarch64-macos`,
-  `x86_64-macos`, and `x86_64-windows`, built by the same GitHub Actions workflow already
-  required for cross-platform CI in §24 — the marginal cost is an upload step on tag.
-- **Install one-liner** in the README (`curl … | sh` fetching the release asset), plus
-  `cargo install` for Rust users. Homebrew tap and `scoop` are nice-to-haves, deferred.
+- **GitHub Releases** with prebuilt binaries for `x86_64-linux`, `aarch64-linux`,
+  `aarch64-macos`, `x86_64-macos`, and `x86_64-windows`, built by the cross-platform CI
+  workflow §24 already requires — the marginal cost is an upload step on tag.
+- **Install paths:** a `curl … | sh` one-liner (Linux/macOS), a PowerShell one-liner
+  (Windows), and `cargo install` for Rust users.
+- **Signing is not optional for the one-minute claim.** Unsigned macOS binaries downloaded
+  via a browser are blocked by Gatekeeper; Windows SmartScreen warns on unsigned
+  executables. `curl | sh` avoids macOS quarantine but does not exist on Windows. Either
+  budget for macOS notarization, or document the quarantine-removal path in the README and
+  scope the one-minute criterion to the one-liner installs.
 - **Relay:** `Dockerfile` per §24, published to GHCR on tag, with the TLS reverse-proxy
-  example from `docs/self-hosting.md`.
-- Release checksums published alongside binaries. Signing is deferred.
+  example from `docs/self-hosting.md`. No public relay is operated for v1 (Open Question 2).
+- Release checksums published alongside binaries.
 
 ## Next Steps
 
-Supersedes §25's ordering (amendment A7).
+Supersedes §25's ordering (A7).
 
 1. **Spike `opaque-ke` v4 in a throwaway binary** — registration + login round trip,
-   confirm `export_key` matches on both sides, before any e2e-chat code exists.
+   identical `export_key` on both sides, and confirm RFC 9807 conformance of the pinned
+   version. Before any e2e-chat code exists.
 2. **Vertical slice:** `serve` with one hardcoded in-memory room; `create` generating the
    room ID, running OPAQUE registration, wrapping a random room key; `join` running OPAQUE
-   login, unwrapping, and exchanging XChaCha20-Poly1305 messages. Line-based UI, `println!`
-   is fine. Relay replays the last 10 ciphertexts.
+   login, unwrapping, exchanging XChaCha20-Poly1305 messages. Line-based UI is fine.
+   *Slice-only shortcut: the relay replays the last 10 ciphertexts rather than the full
+   snapshot §15 requires. Removed at step 5.*
 3. **First integration test:** correct password decrypts, wrong password fails with
    `authentication_failed`, and a frame capture contains no plaintext or key material.
-4. **Add the continuity chain** while the message struct is still small — `prev_hash`,
-   chain verification on receive, `/checkpoint` output.
-5. **Then the spec's infrastructure work:** multi-room state, TTL and expiry sweep,
+4. **Fold A0–A5 and A8 into the spec as v1.1** before the code grows past the slice — the
+   protocol strings and `StoredMessage` shape are cheapest to correct now.
+5. **Spec infrastructure:** multi-room state, TTL and expiry sweep, full history snapshot,
    capacity bounds, history eviction, backpressure, presence and random usernames.
-6. **Then Ratatui TUI, Diceware generation, and the full command set.**
-7. **Then docs (README, SECURITY.md with A4, protocol-v1, self-hosting), CI, Docker,
-   releases.**
-8. **Run the full §23 acceptance suite**, including the manual relay-visibility check.
+6. **Verified continuity (A1):** client-local fold, self-suppression check, `/checkpoint`
+   with ranges, mismatch banner, plus the A9 `TestRelay` fault-injection harness.
+7. **Ratatui TUI, Diceware generation, and the full command set.**
+8. **Docs** (README, SECURITY.md with A4 and the audit-scope wording, protocol-v1,
+   self-hosting), CI, Docker, releases.
+9. **Full §23 acceptance suite**, including the manual relay-visibility check.
 
 ## The Assignment
 
@@ -265,14 +343,14 @@ Supersedes §25's ordering (amendment A7).
 and get a registration + login round trip producing an identical `export_key` on both
 sides.** Time-box it to one sitting.
 
-Everything in this design rests on that library behaving the way the spec assumes. The API
-was verified against upstream docs during this session — both finish calls return
-`export_key` and they match — so this should be a short sitting, not a research project.
-What remains unverified is the part docs cannot tell you: the v4 type surface (ciphersuite
-selection, `ServerSetup` handling, serialization of the registration record for in-memory
-storage) and whether it composes cleanly with your relay's state model. Your own spec says
-to stop and document the blocker if OPAQUE cannot be integrated. Find out on day one, not
-on day nine.
+Everything here rests on that library behaving as the spec assumes. The API was verified
+against upstream docs during this session — both finish calls return `export_key` and they
+match — so this should be short. What remains unverified is what docs cannot tell you: the
+v4 type surface (ciphersuite selection, `ServerSetup` handling, serializing the
+registration record for in-memory storage), whether it composes cleanly with your relay's
+state model, and whether the pinned version is RFC 9807-conformant rather than
+draft-conformant. Your own spec says to stop and document the blocker if OPAQUE cannot be
+integrated. Find out on day one, not on day nine.
 
 ## What I noticed about how you think
 
@@ -280,14 +358,13 @@ on day nine.
   Please read it from the ~/Downloads folder, and give me your opinion."** You'd already
   done the thinking and wanted a reviewer, not a brainstorm partner. That's a different
   and rarer ask.
-- Your spec contains the line **"If a maintained RFC 9807-compatible library cannot be
-  integrated, stop and document the blocker; do not replace OPAQUE with a password hash
-  sent to the relay."** Writing your own stop-condition, in advance, against the shortcut
-  you'd be most tempted to take under deadline — that's someone who has watched a project
-  quietly degrade before.
-- The non-goals list (§4) is longer than the goals list (§3). Most specs list what to
-  build; yours spends more words on what not to build. That's the discipline that decides
-  whether this ships.
-- When Codex challenged the design, you'd already covered it. §13 separates the OPAQUE
-  record from the key envelope; §10.3 already concedes forgery by a participant with the
-  shared room key. The spec anticipated a reviewer it hadn't met yet.
+- Your spec contains **"If a maintained RFC 9807-compatible library cannot be integrated,
+  stop and document the blocker; do not replace OPAQUE with a password hash sent to the
+  relay."** Writing your own stop-condition, in advance, against the shortcut you'd be
+  most tempted to take under deadline — that's someone who has watched a project quietly
+  degrade before.
+- The non-goals list (§4) is longer than the goals list (§3). Most specs describe what to
+  build; yours spends more words on what not to build.
+- §27 requires recording every deviation in `docs/deviations.md` before implementing it.
+  You built the escape hatch for exactly this situation — a reviewer showing up with nine
+  amendments — before any reviewer existed. This document uses it.

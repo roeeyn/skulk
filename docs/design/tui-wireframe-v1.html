@@ -26,7 +26,7 @@
 scrolling transcript, single-line input. Chain health lives in the bar because it is
 ambient state, not an event — the user should never have to ask "is it still OK?"</p>
 <div class="term">
-  <div class="bar"><span>amber-river-copper-moon-…-star</span><span>3 online &nbsp;·&nbsp; chain ok</span></div>
+  <div class="bar"><span>amber-river-copper-moon-…-star</span><span>3 online &nbsp;·&nbsp; continuity ok</span></div>
   <div class="body"><span class="dim">— 23 retained messages loaded —</span>
 <span class="dim">14:02</span> bright-fox-17   hey, does the relay see any of this?
 <span class="dim">14:02</span> quiet-otter-42  no. it stores ciphertext and forwards it.
@@ -36,19 +36,23 @@ ambient state, not an event — the user should never have to ask "is it still O
 </div>
 
 <h2>2 — /checkpoint, codes match</h2>
-<p class="note">Local output, never sent to the relay. Two design decisions worth arguing about:
-the code is grouped into two 4-char halves so it survives being read aloud over a phone
-call, and the line under it names the window explicitly — the chain only covers
-<em>retained</em> history after eviction (design doc, Open Question 1).</p>
+<p class="note">Local output, never sent to the relay. Three decisions worth arguing about:
+the code is <b>six words from the room-ID list (66 bits)</b> because truncation length is a
+security parameter — the relay can grind message subsets offline looking for a code
+collision, so a short 32/40-bit code is forgeable; words rather than hex because the code
+exists to be read aloud; and the range is printed because two honest clients hold different
+windows after eviction or a late join, so comparison must be pinned to a shared range.</p>
 <div class="term">
-  <div class="bar"><span>amber-river-copper-moon-…-star</span><span>3 online &nbsp;·&nbsp; chain ok</span></div>
+  <div class="bar"><span>amber-river-copper-moon-…-star</span><span>3 online &nbsp;·&nbsp; continuity ok</span></div>
   <div class="body"><span class="dim">14:03</span> bright-fox-17   how would we know if it lied?
 
 <span class="dim">— checkpoint —</span>
-    <span class="box">K7QM &nbsp; 4XBT</span>
-    covers 24 messages (#1–#24), all retained history
-    read this aloud. if it matches, no one rewrote your transcript.
-    <span class="dim">it does not prove the relay showed everyone the same thing.</span>
+    <span class="box">harbor lentil dusk maple quartz wren</span>
+    messages #1–#24 (all retained history)
+    read this aloud. if you both pinned the same range and the
+    codes match, you were served the same transcript.
+    <span class="dim">it does not prove the relay showed everyone everything.
+    to compare a shared window: /checkpoint 1 24</span>
 </div>
   <div class="input">&gt; <span class="caret">&nbsp;</span></div>
 </div>
@@ -57,25 +61,28 @@ call, and the line under it names the window explicitly — the chain only cover
 <p class="note">The failure state is the whole point of the feature, so it gets the loudest
 treatment: status bar flips, the transcript is marked at the exact break, and the message
 says what to do rather than what happened. Deliberately does NOT say "you are being
-attacked" — a relay restart or an eviction-boundary bug produces the same signal.</p>
+attacked" — a relay restart or an eviction-boundary bug produces the same signal. It also
+never disconnects: disconnecting on mismatch would hand the relay control of client liveness.</p>
 <div class="term">
-  <div class="bar"><span>amber-river-copper-moon-…-star</span><span>3 online &nbsp;·&nbsp; <b>CHAIN BROKEN</b></span></div>
+  <div class="bar"><span>amber-river-copper-moon-…-star</span><span>3 online &nbsp;·&nbsp; <b>CONTINUITY BROKEN</b></span></div>
   <div class="body"><span class="dim">14:02</span> quiet-otter-42  no. it stores ciphertext and forwards it.
 
-<span class="warn"><b>! chain mismatch at message #18</b>
-  message #18 does not follow #17.
+<span class="warn"><b>! continuity broken at message #18</b>
+  #18 does not follow #17 in the order you were served.
   history may have been reordered, dropped, or replaced.
   live messages are still end-to-end encrypted and unaffected.
-  compare /checkpoint out-of-band before trusting the transcript above.</span>
+  compare /checkpoint 1 17 with someone before trusting the above.</span>
 
 <span class="dim">14:03</span> bright-fox-17   …still here?</div>
   <div class="input">&gt; <span class="caret">&nbsp;</span></div>
 </div>
 
 <h2>4 — Create flow (amendment A5)</h2>
-<p class="note">Premise 3 says confidentiality against the relay operator equals password
-strength, so the generated passphrase is the default path, not the fallback for an empty
-prompt. Pressing Enter accepts it; typing is the deliberate act. This inverts spec §6.1.</p>
+<p class="note">Per A4, anyone holding the room's OPAQUE record — the operator, a memory dump,
+a subpoenaed snapshot — can guess a weak password offline and unwrap the room key, so against
+that party confidentiality <em>is</em> password strength. The generated passphrase therefore
+becomes the default path rather than the fallback for an empty prompt: Enter accepts it,
+typing is the deliberate act. This inverts spec §6.1.</p>
 <div class="col">
   <div class="term" style="max-width:56ch">
     <div class="bar"><span>$ e2e-chat create</span><span></span></div>
@@ -85,7 +92,7 @@ prompt. Pressing Enter accepts it; typing is the deliberate act. This inverts sp
 
 Press Enter to use it, or type your own.
 <span class="dim">A password you invent can be guessed offline
-by whoever runs the relay. See SECURITY.md.</span>
+by anyone holding the room record. See SECURITY.md.</span>
 
 Password: <span class="caret">&nbsp;</span></div>
   </div>
