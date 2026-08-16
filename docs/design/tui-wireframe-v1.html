@@ -1,0 +1,105 @@
+<!-- Rough TUI wireframe. Intentionally unstyled/monochrome: this is a sketch of
+     LAYOUT and INFORMATION HIERARCHY, not a visual design. The only genuinely new
+     UI in the design doc is /checkpoint (amendment A1); everything else is already
+     specified as console transcripts in spec sections 6.1-6.3. -->
+<style>
+  body { background:#fff; color:#111; font:13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+         margin:0; padding:32px; }
+  h2 { font:600 12px/1 ui-monospace, monospace; letter-spacing:.08em; text-transform:uppercase;
+       color:#555; margin:0 0 10px; }
+  .note { color:#666; font-size:11px; margin:6px 0 28px; max-width:62ch; }
+  .term { border:1px solid #bbb; border-radius:4px; max-width:78ch; margin:0 0 8px;
+          overflow:hidden; background:#fff; }
+  .bar { border-bottom:1px solid #ddd; padding:5px 10px; color:#666; font-size:11px;
+         display:flex; justify-content:space-between; }
+  .body { padding:10px; white-space:pre-wrap; min-height:150px; }
+  .input { border-top:1px solid #ddd; padding:6px 10px; color:#333; }
+  .dim { color:#888; }
+  .box { border:1px solid #999; display:inline-block; padding:6px 10px; margin:4px 0; }
+  .caret { background:#111; color:#fff; }
+  .col { display:flex; gap:22px; flex-wrap:wrap; align-items:flex-start; }
+  .warn { border-left:3px solid #999; padding-left:9px; }
+</style>
+
+<h2>1 — Chat, steady state</h2>
+<p class="note">Ratatui layout: thin status bar (room + participant count + chain health),
+scrolling transcript, single-line input. Chain health lives in the bar because it is
+ambient state, not an event — the user should never have to ask "is it still OK?"</p>
+<div class="term">
+  <div class="bar"><span>amber-river-copper-moon-…-star</span><span>3 online &nbsp;·&nbsp; chain ok</span></div>
+  <div class="body"><span class="dim">— 23 retained messages loaded —</span>
+<span class="dim">14:02</span> bright-fox-17   hey, does the relay see any of this?
+<span class="dim">14:02</span> quiet-otter-42  no. it stores ciphertext and forwards it.
+<span class="dim">14:03</span> bright-fox-17   how would we know if it lied?
+<span class="dim">14:03</span> <span class="dim">→ quiet-otter-42 typed /checkpoint</span></div>
+  <div class="input">&gt; <span class="caret">&nbsp;</span></div>
+</div>
+
+<h2>2 — /checkpoint, codes match</h2>
+<p class="note">Local output, never sent to the relay. Two design decisions worth arguing about:
+the code is grouped into two 4-char halves so it survives being read aloud over a phone
+call, and the line under it names the window explicitly — the chain only covers
+<em>retained</em> history after eviction (design doc, Open Question 1).</p>
+<div class="term">
+  <div class="bar"><span>amber-river-copper-moon-…-star</span><span>3 online &nbsp;·&nbsp; chain ok</span></div>
+  <div class="body"><span class="dim">14:03</span> bright-fox-17   how would we know if it lied?
+
+<span class="dim">— checkpoint —</span>
+    <span class="box">K7QM &nbsp; 4XBT</span>
+    covers 24 messages (#1–#24), all retained history
+    read this aloud. if it matches, no one rewrote your transcript.
+    <span class="dim">it does not prove the relay showed everyone the same thing.</span>
+</div>
+  <div class="input">&gt; <span class="caret">&nbsp;</span></div>
+</div>
+
+<h2>3 — Chain broken</h2>
+<p class="note">The failure state is the whole point of the feature, so it gets the loudest
+treatment: status bar flips, the transcript is marked at the exact break, and the message
+says what to do rather than what happened. Deliberately does NOT say "you are being
+attacked" — a relay restart or an eviction-boundary bug produces the same signal.</p>
+<div class="term">
+  <div class="bar"><span>amber-river-copper-moon-…-star</span><span>3 online &nbsp;·&nbsp; <b>CHAIN BROKEN</b></span></div>
+  <div class="body"><span class="dim">14:02</span> quiet-otter-42  no. it stores ciphertext and forwards it.
+
+<span class="warn"><b>! chain mismatch at message #18</b>
+  message #18 does not follow #17.
+  history may have been reordered, dropped, or replaced.
+  live messages are still end-to-end encrypted and unaffected.
+  compare /checkpoint out-of-band before trusting the transcript above.</span>
+
+<span class="dim">14:03</span> bright-fox-17   …still here?</div>
+  <div class="input">&gt; <span class="caret">&nbsp;</span></div>
+</div>
+
+<h2>4 — Create flow (amendment A5)</h2>
+<p class="note">Premise 3 says confidentiality against the relay operator equals password
+strength, so the generated passphrase is the default path, not the fallback for an empty
+prompt. Pressing Enter accepts it; typing is the deliberate act. This inverts spec §6.1.</p>
+<div class="col">
+  <div class="term" style="max-width:56ch">
+    <div class="bar"><span>$ e2e-chat create</span><span></span></div>
+    <div class="body">Suggested passphrase (recommended):
+
+    <span class="box">tidal cobalt fern ripple onyx moth</span>
+
+Press Enter to use it, or type your own.
+<span class="dim">A password you invent can be guessed offline
+by whoever runs the relay. See SECURITY.md.</span>
+
+Password: <span class="caret">&nbsp;</span></div>
+  </div>
+  <div class="term" style="max-width:56ch">
+    <div class="bar"><span>$ e2e-chat create</span><span></span></div>
+    <div class="body">Room: amber-river-copper-moon-forest-
+      glass-harbor-star
+Joined as quiet-otter-42
+
+Share the room ID and passphrase through a
+trusted channel. They are different things:
+the room ID is only an address.
+
+<span class="dim">Type /help for commands.</span>
+&gt; <span class="caret">&nbsp;</span></div>
+  </div>
+</div>
