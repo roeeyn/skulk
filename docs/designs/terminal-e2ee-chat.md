@@ -643,3 +643,33 @@ Three adversarial review rounds ran. The following need building, not more revie
 - §27 requires recording every deviation before implementing it. You built the escape hatch
   for exactly this situation — a reviewer arriving with thirteen amendments — before any
   reviewer existed. This document uses it.
+- Mid-eng-review, you stopped a scope question to say **"wait wait wait, I don't remember
+  to have decided that we're going to use rust for this"** — and later, offered a checkpoint
+  scope cut, answered **"probably this makes sense, we're adding too much."** Twice in one
+  review you overrode momentum with judgment. That's the skill that keeps learning projects
+  alive.
+
+## GSTACK REVIEW REPORT
+
+| Review | Trigger | Why | Runs | Status | Findings |
+|--------|---------|-----|------|--------|----------|
+| CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | — | — |
+| Codex Review | `/codex review` | Independent 2nd opinion | 1 | ABSORBED | 12 findings: 9 precision fixes applied, 2 tensions resolved by user, 1 rejected (word-list conflation) |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | CLEAR | 12 issues, 0 critical gaps, mode SCOPE_REDUCED (M0–M5 ladder) |
+| Design Review | `/plan-design-review` | UI/UX gaps | 0 | — | — |
+| DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | — |
+
+**CODEX:** Outside voice ran on the folded plan; caught one genuine doc bug (stale
+`e2e-chat/v1` labels post-rename) and forced the OPAQUE-profile freeze, the A1c state
+machine, and the FaultProxy-as-forger correction.
+
+**CROSS-MODEL:** Two tensions surfaced and resolved by the user: spike-failure fallback
+softened to an informed decision point (D14), and the /checkpoint ritual usage-gated at
+M4 within the larger M0–M5 restructure (D15/D16). One Codex finding rejected with
+evidence: §9.1 (2,048-word) and §9.2 (7,776-word Diceware) are distinct lists; both
+entropy figures were correct.
+
+**VERDICT:** ENG CLEARED — ready to implement. First action: T1/T2 (M0 walking
+skeleton) in parallel lanes.
+
+NO UNRESOLVED DECISIONS
