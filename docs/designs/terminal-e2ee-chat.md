@@ -205,7 +205,7 @@ head_n   = SHA-256(head_{n-1} || E(msg_n))
 
 ```
 k_check = HKDF-SHA-256(ikm = room_key, salt = UTF8(room_id),
-                       info = "e2e-chat/v1/checkpoint")
+                       info = "skulk/v1/checkpoint")
 
 code(s,e) = word_encode_66( HMAC-SHA-256(k_check, head_e(s,e) || E(s) || E(e)) )
 ```
@@ -271,6 +271,12 @@ untouched. Revealing 66-bit PRF outputs on relay-known inputs leaks nothing abou
 form a strictly-increasing contiguous run across the retained window. This is what powers
 the ambient status indicator and the localized "#18 does not follow #17" banner — the fold
 alone yields one aggregate value and cannot localize anything.
+*State machine (out-of-order arrival is legitimate under §15's snapshot boundary, so a gap
+is NOT "saw #19 before #18"):* maintain the max observed sequence as a watermark; a gap
+alarm fires only when a missing sequence below the watermark remains absent after both
+(a) the history snapshot completed and (b) a settling timeout (recommend 10s) expired.
+Before that, missing sequences are "in flight," not alarms. False alarms train users to
+ignore the banner — the same habituation failure the mismatch UX already guards against.
 
 **A1d — Self-suppression check (partner-free).** A client MUST verify its own sent messages
 appear in its own received stream, within a **defined deadline** (recommend 30s), and warn
@@ -288,7 +294,7 @@ room from `room_key` + `room_id` + a constant `info`, so every client in every s
 derives the same value; §11.4's "once per joined client session" invites an implementer to
 add session context and silently break interop. Appears in §5, §10.1, §11.4, §13, §18.1,
 §20, §22.1 — all seven. **Wire constants unchanged:** the info string is
-`e2e-chat/v1/messages` and contains no such token. Documentation and source only.
+`skulk/v1/messages` and contains no such token. Documentation and source only.
 
 **A3 — Cross-reference §11.2 step 6 to §13.** Make explicit that the relay stores the OPAQUE
 registration record *and* the key envelope as separate fields, plus the server-level OPAQUE
@@ -296,8 +302,10 @@ setup secret. A reader of §11 alone concludes the envelope is all that persists
 
 **A4 — SECURITY.md states the offline-recovery path explicitly, with all three inputs.**
 Anyone holding a room's **OPAQUE registration record**, the **key envelope**, *and* the
-**server-level OPAQUE setup secret** (the OPRF seed — §13 `ServerState.opaque_setup_secret`,
-which lives in the same process memory) can run an offline dictionary attack, recover
+**relay's OPAQUE server setup material** (§13 `ServerState.opaque_setup_secret` — the OPRF
+seed plus the server's key-exchange secret state; the exact inputs required for the pinned
+suite are confirmed empirically during the M2 spike before this SECURITY.md text is
+published) can run an offline dictionary attack, recover
 `export_key`, unwrap the room key, and decrypt all retained history. The operator qualifies;
 so does a memory dump, a compromised host, or a seized snapshot. Against that party,
 confidentiality **is** password strength. A generated 6-word Diceware passphrase (~77 bits)
@@ -363,8 +371,13 @@ decided in eng review with the tolls priced).
   in-memory relay does not have. One `Skulkd.Room` GenServer per room under a
   DynamicSupervisor + Registry (atomic creation — the §21 double-create race resolves via
   `{:error, {:already_started, _}}`), monitors on member pids (crash cleanup = `:DOWN`),
-  `Process.send_after` TTL with lazy expiry checks, injectable clock for §22.1's fake-clock
-  tests. Global history accounting via a single `:ets.update_counter` counter.
+  `Process.send_after` TTL with lazy expiry checks. **Timer abstraction, not just an
+  injectable clock:** `send_after` does not consult an injected clock, so `Skulkd.Room`
+  takes a scheduler behaviour (real: `Process.send_after`; test: manual firing) — that is
+  what makes §22.1's TTL boundary tests deterministic. Global history accounting via
+  `:ets.update_counter` used as an **atomic reserve-then-undo**: increment by the encoded
+  size, and if the returned total exceeds the cap, decrement and reject with
+  `server_capacity` — reservation semantics, not check-then-act.
 - **OPAQUE on the relay:** the BEAM has no RFC 9807 library (verified), so the relay wraps
   `opaque-ke` in a **rustler NIF on dirty CPU schedulers**. The NIF boundary is
   **stateless: bytes in, bytes out** — exactly four pure functions (server setup
@@ -380,7 +393,10 @@ decided in eng review with the tolls priced).
 - **Backpressure (§21):** the room checks `Process.info(pid, :message_queue_len)` before
   each push; over a documented bound (default 500 frames) the client is disconnected.
   Chosen over ack-window flow control: no protocol surface, one call, and §21's
-  requirement is a capacity bound, not exact flow control.
+  requirement is a capacity bound, not exact flow control. Documented honestly as a
+  **best-effort bound** — `message_queue_len` is a snapshot and Bandit's socket write
+  buffers frames beyond it; the guarantee is "runaway growth is cut off," not an exact
+  byte ceiling.
 - **Schema contract (replaces §16.3's shared-crate rule):** a versioned **golden frame
   corpus** in the repo (valid + invalid frames per type); Go and Elixir test suites must
   parse/reject every vector identically or CI fails. The corpus seeds §22.3 fuzzing and IS
@@ -388,12 +404,19 @@ decided in eng review with the tolls priced).
 - **Zeroization (§11.1, degraded honestly):** Go client zeroes key slices explicitly
   (best-effort under GC; no memguard — §10.3 already excludes local-memory attackers);
   SECURITY.md states plainly that the BEAM cannot zeroize and what that means given A4.
-- **Interop spike (replaces the Rust-only spike):** day one, before any product code:
-  Go `bytemare/opaque` client completes registration AND login against the rustler
-  `opaque-ke` NIF on ristretto255-SHA512, `export_key` verified stable across both flows.
-  **Pre-committed fallback:** if interop fails, the stack switches to Go everywhere
-  (`bytemare/opaque` both sides) — decided now, so a spike failure costs a day, not a
-  debate. The spike graduates into a permanent CI interop test.
+- **Interop spike (gates milestone M2, the OPAQUE auth swap):** Go `bytemare/opaque`
+  client completes registration AND login against the rustler `opaque-ke` NIF,
+  `export_key` verified stable across both flows. **The spike must freeze a full OPAQUE
+  profile as protocol constants — library defaults are not a contract:** ciphersuite
+  (ristretto255-SHA512), credential identifier (`room_id` per §11.2), client/server
+  identity parameters, context string, KSF and its parameters (Argon2id, client-side),
+  byte encodings, and failure behavior. Both pinned versions recorded in SECURITY.md.
+  **On spike failure:** one additional time-boxed day of interop debugging, then a
+  deliberate decision with the failure details in hand — Go-everywhere
+  (`bytemare/opaque` both sides) versus keep-Elixir workarounds (suite pinning, Go
+  sidecar). Not an auto-switch: the OTP learning goal is why this stack exists, and
+  abandoning it deserves an informed choice, not a tripwire. The spike graduates into a
+  permanent CI interop test.
 
 **A14 — Test architecture for the split stack** (extends A9).
 
@@ -403,8 +426,13 @@ decided in eng review with the tolls priced).
   stdin/stdout, no TUI — so ExUnit orchestrates it without scraping terminal output. This
   is a product feature as well as a test seam (scripting).
 - **Fault injection is `Skulkd.FaultProxy`** — a test-only Elixir WS proxy between client
-  and relay with drop/reorder/fork/delay hooks, ExUnit-controlled. The real relay never
-  carries misbehavior code. Replaces A9's Go-side TestRelay concept.
+  and relay, ExUnit-controlled. The real relay never carries misbehavior code. Replaces
+  A9's Go-side TestRelay concept. **It is a frame-rewriting forger, not a pass-through:**
+  because clients fold in sequence order, merely delaying or reshuffling delivery changes
+  nothing — to produce divergence the proxy must rewrite relay metadata (`sequence`,
+  `sender_username`, `received_at` are outside the AEAD and rewritable; ciphertext is
+  not), filter frames out of history snapshots per-client, and fork by serving different
+  subsets to different clients.
 - **A9 additions from the eng-review coverage audit:** A1c contiguity-check unit tests
   (gap detection paths); bubbletea TUI coverage via `teatest` (create/join flows, A5
   enter-accepts path, `/checkpoint` including ranges-differ, Ctrl+C semantics);
@@ -460,9 +488,11 @@ the security claim.
 
 §23's checklist stands as written, plus:
 
-- [ ] Two honest clients that pin the same range print matching codes; codes diverge when a
-      `TestRelay` drops, reorders, or forks stored messages for one of them; and a client
-      with a different range is told *"ranges differ"* rather than shown a mismatch.
+- [ ] Two honest clients that pin the same range print matching codes; codes diverge when
+      `Skulkd.FaultProxy` drops, rewrites, or forks stored messages for one of them. The
+      checkpoint UI prints the range prominently and instructs users to compare ranges
+      aloud BEFORE comparing codes (the software cannot see the peer's range; the humans
+      can). The harness-level test pins identical ranges on both clients.
 - [ ] A client that does not hold the room key cannot compute a valid code (assert the
       code is a function of `k_check`, not a public digest).
 - [ ] A client detects suppression of its own sent message, within the A1d deadline, with no
@@ -509,39 +539,59 @@ the security claim.
 
 ## Next Steps
 
-Supersedes §25's ordering and closing line (A7). Stack per A13.
+Supersedes §25's ordering and closing line (A7). Stack per A13. **Restructured by the eng
+review into an incremental milestone ladder** (the user's call: start little by little; a
+walking skeleton first, security layered on when the foundation is alive). Ephemerality
+makes this cheap: rooms never persist, so no milestone migrates data — each upgrade is a
+protocol version bump affecting live clients only.
 
-1. **Interop spike (the new day-one gate):** rustler NIF exposing `opaque-ke`'s four
-   server ops to a scratch Elixir app; scratch Go program using `bytemare/opaque` completes
-   registration AND login against it on ristretto255-SHA512; assert `export_key` equality
-   across both flows on the Go side. Confirm RFC 9807 (not draft) conformance of both
-   pinned versions. **If it fails: pre-committed fallback to Go everywhere.** Time-box:
-   one sitting to a day.
-2. **Vertical slice:** `skulkd` with one hardcoded in-memory room (Bandit + WebSock +
-   one `Skulkd.Room`); `skulk` in `--headless` line mode doing create (room-ID gen, OPAQUE
-   registration, room-key wrap) and join (OPAQUE login, unwrap, XChaCha exchange).
-   *Slice-only shortcut: the relay replays the last 10 ciphertexts rather than §15's full
-   snapshot. Removed at step 5.*
-3. **First ExUnit integration test:** boots the slice relay, drives two headless clients
-   through Ports — correct password decrypts, wrong password fails with
-   `authentication_failed`, frame capture contains no plaintext or key material.
-4. **Fold the wire-affecting and shape-affecting amendments into spec v1.1** — A0, A3, A4,
-   A5, A8, A10, A11, A12, A13 — before the code grows past the slice. A1, A2, A6, A7, A9,
-   A14 fold in at step 8, when the features they govern exist.
-5. **Relay infrastructure:** multi-room DynamicSupervisor + Registry, TTL sweep + lazy
-   expiry with injectable clock, full history snapshot with boundary sequencing, capacity
-   bounds + ETS byte accounting, history eviction, mailbox-threshold backpressure (3A),
-   presence, random usernames with A12's no-recycle rule. Golden frame corpus + contract
-   tests on both sides (A13).
-6. **Verified continuity (A1):** fold, keyed code, contiguity check, self-suppression
-   check, `/checkpoint` in headless mode, plus `Skulkd.FaultProxy` and the published fold
-   test vector. *Continuity UI (status bar, banner) is built once, in step 7 — not twice.*
-7. **Bubbletea TUI** including the continuity UI, Diceware generation, full command set,
-   `teatest` coverage, and the wireframe update noted above (skulk naming + keyed code).
-8. **Docs** (README, SECURITY.md with A4 + audit scope + continuity limits + A13
-   zeroization honesty, protocol-v1 with the golden corpus, self-hosting), remaining
-   amendment folding, CI (Go matrix + ExUnit + interop test), Docker/GHCR, releases.
-9. **Full §23 acceptance suite**, including the manual relay-visibility check.
+**Ladder-wide constraint:** the M0 wire protocol uses the final frame envelope
+(`{"v", "type", "request_id", "payload"}`) with a plaintext `text` field where M3 puts
+`nonce` + `ciphertext` — so E2EE lands as a payload swap and version bump, never a new
+protocol.
+
+**M0 — Walking skeleton (the new MVP).**
+`skulkd`: Bandit + Plug (`/healthz`, `/v1/ws`) + WebSock; `Skulkd.Room` GenServer per
+room under DynamicSupervisor + Registry (atomic creation); random usernames; presence
+(`presence.joined/left`, `/who`); in-memory history with snapshot-on-join; TTL with the
+timer-abstraction seam; room passwords via **argon2id** (`argon2_elixir` — the same
+hashing `phx.gen.auth` uses; no Phoenix) — password sent over wss, hashed at the relay.
+`skulk`: bubbletea TUI + `--headless` line mode; create / join / chat; `/help`, `/who`,
+`/quit`; Ctrl+C semantics. First ExUnit integration test: boots relay, drives two headless
+clients through Ports, exchanges Unicode both ways.
+**Honesty gate (spec §27): M0's README states in plain words that the relay can read all
+messages and E2EE is a later milestone. v0 is never described as private or E2EE.**
+
+**M1 — Hardening.** Capacity bounds (§8) with atomic reserve-then-undo accounting;
+history eviction (count + bytes); mailbox-threshold backpressure (3A); `room_full` /
+`server_capacity`; A12 username no-recycle; reconnect-is-fresh-join (§20); golden frame
+corpus + contract tests both sides (A13); fuzz/property tests on frame decoding (§22.3);
+fake-timer TTL boundary tests.
+
+**M2 — Real auth (OPAQUE).** The interop spike (A13 — including the OPAQUE profile
+freeze and the on-failure decision point) gates this milestone. On success: swap argon2id
+room passwords for OPAQUE registration/login via the stateless rustler NIF. The relay
+stops ever seeing passwords. Protocol v2.
+
+**M3 — E2EE.** Room-key generation + envelope under `export_key` (§11.2), XChaCha20
+message encryption with domain-separated AAD (§11.4, as `skulk/v1/...`), A8's
+`sender_username` capture, zeroization per 5A. The `text` field becomes
+`nonce`+`ciphertext`. Frame-capture test proves no plaintext at the relay. Protocol v3.
+
+**M4 — Integrity.** A1a fold + A1c contiguity (with its state machine) + A1d
+self-suppression ship as the MVP integrity layer. **`/checkpoint` (A1b's spoken
+comparison) is gated on real usage** — build it when you and a friend actually want to
+compare transcripts, not before (Codex finding #12, accepted). `Skulkd.FaultProxy`
+forger + fold test vector land here.
+
+**M5 — Distribution.** GitHub Releases (Go matrix), install one-liners, Docker/GHCR
+relay image, `docs/self-hosting.md`, checksums — per the Distribution Plan. Full §23
+acceptance suite (as amended) runs here.
+
+**Spec v1.1 fold:** A0, A3, A4, A5, A8, A10, A11, A12, A13 fold into the committed spec
+(`docs/spec/terminal_chat_mvp_spec.md`) before M0 code grows past the skeleton; A1, A2,
+A6, A7, A9, A14 fold at the milestone where their features land. The §23 acceptance
+checklist becomes the M5 gate, not the M0 gate.
 
 ## The Assignment
 
