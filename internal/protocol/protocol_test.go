@@ -7,11 +7,9 @@ package protocol_test
 // and must accept/reject every vector in docs/protocol/corpus/ identically, with
 // identical error codes. The Elixir half is skulkd/test/protocol_contract_test.exs.
 //
-// STATE AT THE END OF ROJ-29: TestCorpusIntegrity passes; the two codec tests
-// fail, because internal/protocol has no codec yet — that is ROJ-33 (M0-5).
-// The failure is deliberate and is this ticket's deliverable. To turn it green,
-// ROJ-33 replaces the body of newValidator (and nothing else in this file) with
-// an adapter over the real codec.
+// Green since ROJ-33 implemented internal/protocol. Both languages now agree on
+// all 59 vectors, which is the first time design A13's central claim — two
+// independent codecs, one contract — is actually enforced rather than promised.
 
 import (
 	"bytes"
@@ -23,6 +21,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/roeeyn/skulk/internal/protocol"
 )
 
 // corpusDir is relative to this package directory: `go test` sets the working
@@ -59,22 +59,15 @@ type validateFn func(receiver role, kind frameKind, frame []byte) (errorCode str
 
 // newValidator returns the codec under test.
 //
-// ROJ-33 (M0-5) implements internal/protocol and replaces this body with an
-// adapter, e.g.:
-//
-//	return func(receiver role, kind frameKind, frame []byte) string {
-//		return protocol.Validate(protocol.Role(receiver), protocol.Kind(kind), frame)
-//	}
+// ROJ-29 shipped this as a t.Fatalf stub — the corpus and both harnesses existed
+// before either codec did, and the red was the spec. ROJ-33 replaced the body
+// with this adapter and nothing else in the file changed, which is what the seam
+// was shaped for.
 func newValidator(t *testing.T) validateFn {
 	t.Helper()
-	t.Fatalf("protocol v0 codec is not implemented yet.\n"+
-		"  This failure is expected and is ROJ-29's deliverable: the corpus and both\n"+
-		"  contract harnesses exist before any codec does.\n"+
-		"  Implement it in ROJ-33 (M0-5) against %s, then replace newValidator in %s.\n"+
-		"  Corpus integrity is checked separately by TestCorpusIntegrity, which passes —\n"+
-		"  so a red run here means a missing codec, not a broken harness.",
-		"docs/protocol-v0.md", "internal/protocol/protocol_test.go")
-	return nil
+	return func(receiver role, kind frameKind, frame []byte) string {
+		return protocol.Validate(protocol.Role(receiver), protocol.Kind(kind), frame)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -363,16 +356,10 @@ func TestCorpusIntegrity(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Pass 2 and 3 — the codec contract. Both fail until ROJ-33 lands.
-//
-// The TestPendingCodec_ prefix is the Go half of the "red by design" convention.
-// CI gates on `go test ./... -skip '^TestPendingCodec'` (must be green) and
-// separately asserts these are still failing — so the day the codec lands, CI
-// fails until the prefix and that CI step are removed together. Plain
-// `go test ./...` stays red on purpose: the red IS the spec.
+// Pass 2 and 3 — the codec contract, green since ROJ-33.
 // ---------------------------------------------------------------------------
 
-func TestPendingCodec_ValidVectorsAreAccepted(t *testing.T) {
+func TestValidVectorsAreAccepted(t *testing.T) {
 	c := loadCorpus(t)
 	validate := newValidator(t)
 
@@ -390,7 +377,7 @@ func TestPendingCodec_ValidVectorsAreAccepted(t *testing.T) {
 	}
 }
 
-func TestPendingCodec_InvalidVectorsAreRejectedWithTheAnnotatedCode(t *testing.T) {
+func TestInvalidVectorsAreRejectedWithTheAnnotatedCode(t *testing.T) {
 	c := loadCorpus(t)
 	validate := newValidator(t)
 
@@ -432,4 +419,72 @@ func contains(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// ---------------------------------------------------------------------------
+// Pass 4 — canonical encoding (ROJ-33 acceptance criterion).
+// ---------------------------------------------------------------------------
+
+// TestEncodeRoundTripsCanonically asserts that encoding a decoded frame is
+// idempotent and that the result decodes again.
+//
+// "Canonical" here means canonical for THIS implementation — envelope fields in
+// the §3 order, payload keys sorted. Byte-identical output across languages is
+// deliberately NOT asserted: the corpus made `wire.json` length-unstable on
+// purpose (see its README), and nothing in protocol v0 depends on two languages
+// producing the same bytes. What matters is that re-encoding never drifts.
+func TestEncodeRoundTripsCanonically(t *testing.T) {
+	c := loadCorpus(t)
+
+	for _, v := range c.valid {
+		t.Run(v.Name, func(t *testing.T) {
+			frame, err := v.bytes()
+			if err != nil {
+				t.Fatalf("reconstructing frame: %v", err)
+			}
+
+			decoded, rej := protocol.Decode(protocol.Role(v.role()), protocol.Kind(v.kind()), frame)
+			if rej != nil {
+				t.Fatalf("valid vector rejected: %v", rej)
+			}
+
+			once, err := protocol.Encode(decoded)
+			if err != nil {
+				t.Fatalf("encoding: %v", err)
+			}
+
+			// The re-encoded frame must still be valid...
+			redecoded, rej := protocol.Decode(protocol.Role(v.role()), protocol.Kind(v.kind()), once)
+			if rej != nil {
+				t.Fatalf("re-encoded frame rejected: %v\n  %s", rej, once)
+			}
+
+			// ...and encoding it again must produce identical bytes. Idempotence is
+			// the property that makes "canonical" mean anything.
+			twice, err := protocol.Encode(redecoded)
+			if err != nil {
+				t.Fatalf("re-encoding: %v", err)
+			}
+			if !bytes.Equal(once, twice) {
+				t.Errorf("encoding is not idempotent:\n  first:  %s\n  second: %s", once, twice)
+			}
+		})
+	}
+}
+
+// TestEncodeOmitsAbsentRequestID pins the one envelope field that is conditional.
+// A broadcast frame carrying a request_id fails V9 at the peer (protocol §4.3),
+// so an empty RequestID must vanish rather than encode as "".
+func TestEncodeOmitsAbsentRequestID(t *testing.T) {
+	encoded, err := protocol.Encode(protocol.Frame{
+		V:       protocol.Version,
+		Type:    "presence.joined",
+		Payload: map[string]any{"sender_id": "u3Bk9QzR2mXvLp7TnAeYwQ", "username": "quiet-otter-42", "participant_count": 2},
+	})
+	if err != nil {
+		t.Fatalf("encoding: %v", err)
+	}
+	if strings.Contains(string(encoded), "request_id") {
+		t.Errorf("absent request_id must not be encoded, got %s", encoded)
+	}
 }
