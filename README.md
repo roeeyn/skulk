@@ -19,6 +19,7 @@ so do `bright-fox-17` and friends.
 - `docs/spec/` — the MVP specification (v1.1 = spec + design amendments A0–A15)
 - `docs/designs/` — design doc with the full review trail
 - `docs/protocol-v0.md` — the M0 wire protocol: frames, limits, validation order
+- `docs/headless-v1.md` — the `--headless` machine interface for scripts and AI agents
 - `docs/protocol/corpus/` — golden frame vectors; the cross-language contract
 
 ## Status
