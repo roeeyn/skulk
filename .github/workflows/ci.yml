@@ -103,8 +103,13 @@ jobs:
       # instructed — the second and last time that handoff fires. Both languages now
       # agree on all 59 vectors, which is design A13's central claim finally enforced
       # rather than promised.
+      # -race because this ticket's code is concurrent by nature (a session reader,
+      # an event pump, a command loop) and the detector found three real bugs during
+      # ROJ-33 that the plain run did not: a production data race on the exit code,
+      # a test harness racing the writer it read, and unsynchronised state in the
+      # fake relay. The cost is a couple of seconds.
       - name: go test
-        run: go test ./...
+        run: go test -race ./...
 
   # ---------------------------------------------------------------------------
   # ExUnit drives everything (design A14): the relay boots in-process and real

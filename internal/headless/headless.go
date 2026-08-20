@@ -15,6 +15,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/roeeyn/skulk/internal/protocol"
 	"github.com/roeeyn/skulk/internal/relay"
@@ -66,8 +67,16 @@ type Runner struct {
 	session    *relay.Session
 	joined     bool
 	done       chan struct{}
+	pumpDone   chan struct{}
 	finishOnce sync.Once
-	exit       int
+	// Set before a deliberate shutdown, so the event pump can tell "the relay
+	// dropped us" from "we hung up". Closing the socket looks identical to the
+	// reader either way.
+	stopping atomic.Bool
+	// Written by whichever of the command loop and the event pump gets there
+	// first, read by Run. Atomic because only one of Run's two exit paths has a
+	// happens-before edge to the writer.
+	exit atomic.Int32
 }
 
 type command struct {
@@ -80,7 +89,7 @@ type command struct {
 // never calls os.Exit, so tests can drive it directly.
 func (r *Runner) Run(ctx context.Context) int {
 	r.done = make(chan struct{})
-	r.exit = ExitOK
+	r.exit.Store(ExitOK)
 
 	// §4: ready is the first line on stdout, emitted BEFORE any network activity.
 	// It announces the contract, not connectivity, and a harness waits for it.
@@ -106,10 +115,16 @@ func (r *Runner) Run(ctx context.Context) int {
 	case <-r.done:
 	}
 
+	// Closing the session ends the relay's event stream, which ends the pump. Wait
+	// for it: a pump still writing to stdout after Run returns would race whoever
+	// reads that output, and in a test that whoever is the assertion.
 	if r.session != nil {
 		_ = r.session.Close()
 	}
-	return r.exit
+	if r.pumpDone != nil {
+		<-r.pumpDone
+	}
+	return int(r.exit.Load())
 }
 
 func (r *Runner) readCommands(ctx context.Context) {
@@ -121,7 +136,9 @@ func (r *Runner) readCommands(ctx context.Context) {
 			// §5.5 / decision H2: EOF on stdin is `quit`. A supervising process
 			// closes stdin to signal shutdown, and an Elixir Port does so when the
 			// port closes — the harness's own shutdown path.
+			r.stopping.Store(true)
 			r.emit(map[string]any{"event": "bye", "data": map[string]any{}})
+			r.finish(ExitOK)
 			return
 		}
 		if tooLong {
@@ -155,7 +172,9 @@ func (r *Runner) dispatch(ctx context.Context, cmd command) (stop bool) {
 	case "who":
 		return r.who(ctx, cmd)
 	case "quit":
+		r.stopping.Store(true)
 		r.emit(map[string]any{"id": cmd.ID, "event": "bye", "data": map[string]any{}})
+		r.finish(ExitOK)
 		return true
 	default:
 		r.clientError(cmd.ID, codeInvalidCommand, fmt.Sprintf("unknown command %q", cmd.Command), false)
@@ -201,7 +220,7 @@ func (r *Runner) create(ctx context.Context, cmd command) bool {
 		return r.relayFatal(cmd.ID, err)
 	}
 	r.joined = true
-	go r.pump()
+	r.startPump()
 
 	// §5.1: the password is ALWAYS returned, generated or supplied. A generated
 	// passphrase no program can read is a passphrase that cannot be shared, which
@@ -242,7 +261,7 @@ func (r *Runner) join(ctx context.Context, cmd command) bool {
 		return r.relayFatal(cmd.ID, err)
 	}
 	r.joined = true
-	go r.pump()
+	r.startPump()
 
 	r.emit(map[string]any{"id": cmd.ID, "event": "joined", "data": map[string]any{
 		"room_id":           info.RoomID,
@@ -330,6 +349,14 @@ func (r *Runner) connect(ctx context.Context, id string) bool {
 	return false
 }
 
+func (r *Runner) startPump() {
+	r.pumpDone = make(chan struct{})
+	go func() {
+		defer close(r.pumpDone)
+		r.pump()
+	}()
+}
+
 // pump forwards everything the relay pushes. Started only after a session exists,
 // so it never races the create/join response it must follow.
 func (r *Runner) pump() {
@@ -354,6 +381,12 @@ func (r *Runner) pump() {
 			return
 
 		case relay.EventDisconnect:
+			// §5.5: after `bye`, no `disconnected` — emitting both would make an
+			// orderly exit indistinguishable from a failure, and our own Close is
+			// what the reader just tripped over.
+			if r.stopping.Load() {
+				return
+			}
 			// §6.5: terminal. Spec §20 makes reconnection a fresh join with a new
 			// identity, so silently reconnecting would misrepresent continuity.
 			r.emit(map[string]any{"event": "disconnected", "data": map[string]any{
@@ -386,21 +419,21 @@ func (r *Runner) errorEvent(id, source, code, message string, fatal bool) {
 // has no one to ask for a corrected password. One process is one join attempt.
 func (r *Runner) fatal(id, code, message string, exit int) bool {
 	r.clientError(id, code, message, true)
-	r.exit = exit
+	r.exit.Store(int32(exit))
 	return true
 }
 
 func (r *Runner) relayFatal(id string, err error) bool {
 	code := relayCode(err)
 	r.errorEvent(id, "wire", code, relayMessage(err), true)
-	r.exit = exitFor(code)
+	r.exit.Store(int32(exitFor(code)))
 	return true
 }
 
 // finish ends the process after a terminal relay event. Run is waiting on r.done.
 func (r *Runner) finish(exit int) {
 	r.finishOnce.Do(func() {
-		r.exit = exit
+		r.exit.Store(int32(exit))
 		close(r.done)
 	})
 }

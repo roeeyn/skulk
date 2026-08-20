@@ -32,7 +32,11 @@ type Relay struct {
 	rooms map[string]*room
 }
 
+// Every connection is its own goroutine, so room state needs a lock. The real
+// relay does not: skulkd gives each room a GenServer, and the process IS the
+// concurrency control. This is the cost of not being that.
 type room struct {
+	mu       sync.Mutex
 	password string
 	members  []*member
 	sequence int
@@ -157,7 +161,7 @@ func (r *Relay) dispatch(conn *websocket.Conn, frame protocol.Frame, joined *roo
 			V: protocol.Version, Type: "presence.joined",
 			Payload: map[string]any{
 				"sender_id": m.senderID, "username": m.username,
-				"participant_count": len(rm.members),
+				"participant_count": rm.size(),
 			},
 		}, m)
 		return rm, m
@@ -178,7 +182,7 @@ func (r *Relay) dispatch(conn *websocket.Conn, frame protocol.Frame, joined *roo
 		send(conn, protocol.Frame{
 			V: protocol.Version, Type: "presence.list", RequestID: frame.RequestID,
 			Payload: map[string]any{
-				"participants": joined.roster(), "participant_count": len(joined.members),
+				"participants": joined.roster(), "participant_count": joined.size(),
 			},
 		})
 		return joined, self
@@ -230,7 +234,7 @@ func (r *Relay) removeMember(rm *room, m *member) {
 		V: protocol.Version, Type: "presence.left",
 		Payload: map[string]any{
 			"sender_id": m.senderID, "username": m.username,
-			"participant_count": len(rm.members),
+			"participant_count": rm.size(),
 		},
 	}, nil)
 }
@@ -246,6 +250,9 @@ func (rm *room) admit(conn *websocket.Conn) *member {
 	n := counter.n
 	counter.Unlock()
 
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+
 	m := &member{
 		senderID: fmt.Sprintf("%022d", n),
 		username: fmt.Sprintf("quiet-otter-%02d", n%100),
@@ -256,6 +263,9 @@ func (rm *room) admit(conn *websocket.Conn) *member {
 }
 
 func (rm *room) remove(target *member) {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+
 	kept := rm.members[:0]
 	for _, m := range rm.members {
 		if m != target {
@@ -265,7 +275,22 @@ func (rm *room) remove(target *member) {
 	rm.members = kept
 }
 
+func (rm *room) size() int {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	return len(rm.members)
+}
+
+func (rm *room) seq() int {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	return rm.sequence
+}
+
 func (rm *room) roster() []any {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+
 	out := make([]any, 0, len(rm.members))
 	for _, m := range rm.members {
 		out = append(out, map[string]any{"sender_id": m.senderID, "username": m.username})
@@ -274,6 +299,9 @@ func (rm *room) roster() []any {
 }
 
 func (rm *room) snapshot() []any {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+
 	out := make([]any, 0, len(rm.history))
 	for _, h := range rm.history {
 		out = append(out, h)
@@ -282,6 +310,7 @@ func (rm *room) snapshot() []any {
 }
 
 func (rm *room) post(roomID string, sender *member, messageID, text string) {
+	rm.mu.Lock()
 	rm.sequence++
 	payload := map[string]any{
 		"room_id": roomID, "message_id": messageID,
@@ -290,16 +319,25 @@ func (rm *room) post(roomID string, sender *member, messageID, text string) {
 		"text": text,
 	}
 	rm.history = append(rm.history, payload)
+	rm.mu.Unlock()
 
 	// Amendment A11: the sender receives its own message too, byte-identical.
 	rm.broadcast(protocol.Frame{V: protocol.Version, Type: "chat.message", Payload: payload}, nil)
 }
 
 func (rm *room) broadcast(frame protocol.Frame, except *member) {
+	// Copy under the lock, write outside it: a slow socket must not hold the room.
+	rm.mu.Lock()
+	targets := make([]*member, 0, len(rm.members))
 	for _, m := range rm.members {
 		if m != except {
-			send(m.conn, frame)
+			targets = append(targets, m)
 		}
+	}
+	rm.mu.Unlock()
+
+	for _, m := range targets {
+		send(m.conn, frame)
 	}
 }
 
