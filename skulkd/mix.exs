@@ -53,6 +53,11 @@ defmodule Skulkd.MixProject do
       {:stream_data, "~> 1.1", only: [:test, :dev]},
       # A raw WebSocket client for transport tests — raw on purpose: the corpus
       # contains frames no well-behaved client would ever send (ROJ-32).
+      #
+      # Not replaceable by Req: Req is built on Finch, and Finch is HTTP-only, so
+      # nothing in that stack can perform a WebSocket upgrade. `mint` itself is
+      # transitive from this, not a dependency we chose directly. The few plain HTTP
+      # calls in the test suite reuse Mint rather than adding a second HTTP client.
       {:mint_web_socket, "~> 1.0", only: :test}
     ]
   end
