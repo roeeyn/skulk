@@ -13,8 +13,8 @@ so do `bright-fox-17` and friends.
 
 ## Layout
 
-- `cmd/skulk/`, `internal/` — Go terminal client (bubbletea TUI + `--headless`
-  JSON line mode for tests and AI agents)
+- `cmd/skulk/`, `internal/` — Go terminal client: bubbletea TUI (`skulk create`,
+  `skulk join <ROOM_ID>`) and `--headless` JSON line mode for scripts and AI agents
 - `skulkd/` — Elixir relay (Bandit + WebSock, one GenServer per room)
 - `docs/spec/` — the MVP specification (v1.1 = spec + design amendments A0–A15)
 - `docs/designs/` — design doc with the full review trail
