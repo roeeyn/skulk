@@ -16,13 +16,20 @@ import (
 
 // agent drives one headless process the way an AI agent or the ExUnit harness
 // does: JSON lines in, JSON lines out.
+//
+// It reads stdout CONTINUOUSLY on its own goroutine rather than on demand. That
+// is not a convenience — a real consumer does the same, and a harness that only
+// reads when it wants something will deadlock the moment the client emits an
+// unsolicited event nobody is waiting for. Run waits for the event pump to drain
+// before returning, so an unread pipe blocks the process from exiting at all.
 type agent struct {
 	t      *testing.T
 	stdin  *io.PipeWriter
-	stdout *bufio.Reader
-	stderr *strings.Builder
+	stderr *lockedBuffer
+	events chan map[string]any
 	exit   chan int
-	mu     sync.Mutex
+
+	pending []map[string]any
 }
 
 func start(t *testing.T, server string) *agent {
@@ -30,21 +37,42 @@ func start(t *testing.T, server string) *agent {
 
 	inR, inW := io.Pipe()
 	outR, outW := io.Pipe()
-	stderr := &strings.Builder{}
+	stderr := &lockedBuffer{}
 
 	a := &agent{
-		t: t, stdin: inW, stdout: bufio.NewReaderSize(outR, 1<<20),
-		stderr: stderr, exit: make(chan int, 1),
+		t: t, stdin: inW, stderr: stderr,
+		events: make(chan map[string]any, 256),
+		exit:   make(chan int, 1),
 	}
 
 	runner := &headless.Runner{
 		In: inR, Out: outW, Err: stderr,
 		Server: server, ClientVersion: "test",
 	}
+
 	go func() {
 		code := runner.Run(context.Background())
 		outW.Close()
 		a.exit <- code
+	}()
+
+	go func() {
+		defer close(a.events)
+		reader := bufio.NewReaderSize(outR, 1<<20)
+		for {
+			line, err := reader.ReadString('\n')
+			if trimmed := strings.TrimSpace(line); trimmed != "" {
+				var event map[string]any
+				if jsonErr := json.Unmarshal([]byte(trimmed), &event); jsonErr != nil {
+					t.Errorf("stdout line is not JSON: %q", trimmed)
+					return
+				}
+				a.events <- event
+			}
+			if err != nil {
+				return
+			}
+		}
 	}()
 
 	t.Cleanup(func() { inW.Close() })
@@ -58,28 +86,12 @@ func (a *agent) send(line string) {
 	}
 }
 
-// next reads one event, failing the test on timeout rather than hanging.
 func (a *agent) next() map[string]any {
 	a.t.Helper()
-
-	type read struct {
-		line string
-		err  error
-	}
-	ch := make(chan read, 1)
-	go func() {
-		line, err := a.stdout.ReadString('\n')
-		ch <- read{line, err}
-	}()
-
 	select {
-	case r := <-ch:
-		if r.err != nil && r.line == "" {
+	case event, ok := <-a.events:
+		if !ok {
 			a.t.Fatalf("stdout closed while waiting for an event (stderr: %s)", a.stderr.String())
-		}
-		var event map[string]any
-		if err := json.Unmarshal([]byte(strings.TrimSpace(r.line)), &event); err != nil {
-			a.t.Fatalf("stdout line is not JSON: %q", r.line)
 		}
 		return event
 	case <-time.After(5 * time.Second):
@@ -88,18 +100,43 @@ func (a *agent) next() map[string]any {
 	}
 }
 
-// await skips unsolicited events until one of the wanted kind arrives. Ordering
-// between pushes and responses is explicitly not promised (docs/headless-v1.md §11).
+// await returns the next event of the wanted kind, BUFFERING the others rather
+// than discarding them.
+//
+// The buffering is the whole point. docs/headless-v1.md §11 promises no ordering
+// between unsolicited events and command responses, and the implementation makes
+// good on that: `accepted` is written by the command loop while `message` comes
+// from the event pump, on separate goroutines. A harness that discarded
+// non-matching events would consume the echo while waiting for `accepted` and
+// then hang forever waiting for the echo — which is exactly what CI caught on the
+// first run, and what would otherwise have flaked here forever.
 func (a *agent) await(event string) map[string]any {
 	a.t.Helper()
-	for i := 0; i < 20; i++ {
+
+	for i, pending := range a.pending {
+		if pending["event"] == event {
+			a.pending = append(a.pending[:i], a.pending[i+1:]...)
+			return pending
+		}
+	}
+
+	for i := 0; i < 30; i++ {
 		e := a.next()
 		if e["event"] == event {
 			return e
 		}
+		a.pending = append(a.pending, e)
 	}
-	a.t.Fatalf("never saw a %q event", event)
+	a.t.Fatalf("never saw a %q event (buffered: %v)", event, a.kinds())
 	return nil
+}
+
+func (a *agent) kinds() []string {
+	out := make([]string, 0, len(a.pending))
+	for _, e := range a.pending {
+		out = append(out, e["event"].(string))
+	}
+	return out
 }
 
 func (a *agent) code() int {
@@ -108,7 +145,7 @@ func (a *agent) code() int {
 	case c := <-a.exit:
 		return c
 	case <-time.After(5 * time.Second):
-		a.t.Fatal("process did not exit")
+		a.t.Fatalf("process did not exit (stderr: %s)", a.stderr.String())
 		return -1
 	}
 }
@@ -465,8 +502,10 @@ func TestClosingStdinIsQuit(t *testing.T) {
 func TestStdoutIsOnlyJSON(t *testing.T) {
 	relay := fakeRelay(t)
 
-	stdout := &strings.Builder{}
-	stderr := &strings.Builder{}
+	// A locked writer, not a strings.Builder: the runner writes from two goroutines
+	// and this test reads the result, which the race detector rightly objects to.
+	stdout := &lockedBuffer{}
+	stderr := &lockedBuffer{}
 	stdin, stdinW := io.Pipe()
 
 	runner := &headless.Runner{In: stdin, Out: stdout, Err: stderr, Server: relay.URL(), ClientVersion: "test"}
@@ -499,4 +538,22 @@ func TestStdoutIsOnlyJSON(t *testing.T) {
 			t.Errorf("stdout line %d has no event field: %q", i, line)
 		}
 	}
+}
+
+// lockedBuffer is an io.Writer a test can read while a goroutine writes to it.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
