@@ -1,0 +1,37 @@
+defmodule Skulkd.MixProject do
+  use Mix.Project
+
+  def project do
+    [
+      app: :skulkd,
+      version: "0.1.0",
+      elixir: "~> 1.18",
+      start_permanent: Mix.env() == :prod,
+      deps: deps()
+    ]
+  end
+
+  # Run "mix help compile.app" to learn about applications.
+  def application do
+    [
+      extra_applications: [:logger],
+      mod: {Skulkd.Application, []}
+    ]
+  end
+
+  # Run "mix help deps" to learn about dependencies.
+  defp deps do
+    [
+      # HTTP server + WebSocket (the stack Phoenix itself sits on; no Phoenix — see
+      # docs/designs/terminal-e2ee-chat.md A13: Channels/Presence deliberately excluded)
+      {:bandit, "~> 1.6"},
+      {:websock_adapter, "~> 0.5"},
+      {:plug, "~> 1.16"},
+      {:jason, "~> 1.4"},
+      # M0 room passwords (same hashing phx.gen.auth uses)
+      {:argon2_elixir, "~> 4.0"},
+      # Property-based tests for frame validation (§22.3 / A14)
+      {:stream_data, "~> 1.1", only: [:test, :dev]}
+    ]
+  end
+end

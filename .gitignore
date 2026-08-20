@@ -1,0 +1,19 @@
+# gstack local state
+.gstack/
+
+# Elixir (skulkd/)
+skulkd/_build/
+skulkd/deps/
+skulkd/*.ez
+skulkd/erl_crash.dump
+skulkd/.elixir_ls/
+
+# Go
+/skulk
+/bin/
+*.test
+*.out
+
+# OS / editor
+.DS_Store
+*.swp
