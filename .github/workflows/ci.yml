@@ -34,7 +34,7 @@ jobs:
       run:
         working-directory: skulkd
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Erlang/OTP + Elixir
         uses: erlef/setup-beam@v1
@@ -45,7 +45,7 @@ jobs:
 
       # actions/cache paths are workspace-relative, not job-working-directory-relative.
       - name: Cache deps and _build
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             skulkd/deps
@@ -68,6 +68,13 @@ jobs:
       # Without this, `--exclude pending_codec` would be a place for real failures to
       # hide, and the day the codec lands nobody would notice the exclusion is stale.
       - name: protocol contract tests must still be red (ROJ-32)
+        env:
+          # Elixir emits a GitHub annotation per test failure when GITHUB_ACTIONS=true.
+          # These 59 failures are the expected outcome, so annotating them would put a
+          # wall of red on every PR and train everyone to ignore the annotation channel
+          # — the same habituation failure the design doc warns about for the M4
+          # mismatch banner. The step's own exit code is the signal here.
+          GITHUB_ACTIONS: "false"
         run: |
           if mix test --only pending_codec; then
             echo "::error::The protocol v0 corpus now PASSES on the relay side."
@@ -84,10 +91,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           # Read from go.mod so the toolchain can never drift from the repo's own pin.
           go-version-file: go.mod
@@ -133,7 +140,7 @@ jobs:
     timeout-minutes: 10
     needs: [relay, client]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Erlang/OTP + Elixir
         uses: erlef/setup-beam@v1
@@ -143,7 +150,7 @@ jobs:
           otp-version: ${{ env.OTP_VERSION }}
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache-dependency-path: go.mod
@@ -151,7 +158,7 @@ jobs:
       # Same key as the relay job, so this job restores that job's cache instead of
       # recompiling every dependency from scratch.
       - name: Cache deps and _build
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             skulkd/deps
