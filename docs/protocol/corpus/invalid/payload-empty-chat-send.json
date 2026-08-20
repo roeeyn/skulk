@@ -1,0 +1,23 @@
+{
+  "name": "payload-empty-chat-send",
+  "description": "chat.send with an empty payload: both required fields are missing.",
+  "frame_type": "chat.send",
+  "direction": "c2r",
+  "receiver": "relay",
+  "expect": {
+    "result": "reject",
+    "error_code": "invalid_message",
+    "rule": "V12",
+    "close": false
+  },
+  "wire": {
+    "kind": "text",
+    "json": {
+      "v": 0,
+      "type": "chat.send",
+      "request_id": "3f2a7c1e-9b4d-4e28-8a51-6c0d2e7f9b13",
+      "payload": {}
+    }
+  },
+  "notes": "An empty payload is VALID for ping and for presence.list c2r. Emptiness is not the defect; the missing required fields are."
+}

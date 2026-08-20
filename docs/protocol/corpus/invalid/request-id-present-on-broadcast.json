@@ -1,0 +1,30 @@
+{
+  "name": "request-id-present-on-broadcast",
+  "description": "chat.message carrying a request_id. Broadcast frames must not: the sender's copy would differ from every other member's, which is exactly the divergence M4's continuity fold reports as tampering (A11).",
+  "frame_type": "chat.message",
+  "direction": "r2c",
+  "receiver": "client",
+  "expect": {
+    "result": "reject",
+    "error_code": "invalid_message",
+    "rule": "V9",
+    "close": false
+  },
+  "wire": {
+    "kind": "text",
+    "json": {
+      "v": 0,
+      "type": "chat.message",
+      "request_id": "3f2a7c1e-9b4d-4e28-8a51-6c0d2e7f9b13",
+      "payload": {
+        "room_id": "amber-river-copper-moon-forest-glass-harbor-star",
+        "message_id": "9c1e5a20-4b7d-4f61-b8e3-2d5a7c0f1846",
+        "sender_id": "u3Bk9QzR2mXvLp7TnAeYwQ",
+        "sender_username": "quiet-otter-42",
+        "sequence": 1,
+        "received_at": "2026-08-20T14:07:52.418Z",
+        "text": "hello from the walking skeleton"
+      }
+    }
+  }
+}

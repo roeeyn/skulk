@@ -1,0 +1,20 @@
+{
+  "name": "presence-list-request",
+  "description": "The /who request: presence.list c2r with an empty payload and a required request_id.",
+  "frame_type": "presence.list",
+  "direction": "c2r",
+  "receiver": "relay",
+  "expect": {
+    "result": "accept"
+  },
+  "wire": {
+    "kind": "text",
+    "json": {
+      "v": 0,
+      "type": "presence.list",
+      "request_id": "e4a91f7b-2c3d-4a58-9b06-8fd1c25e73a4",
+      "payload": {}
+    }
+  },
+  "notes": "An empty payload object is valid HERE and invalid for chat.send — payload schemas are per (type, direction)."
+}

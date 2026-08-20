@@ -1,0 +1,25 @@
+{
+  "name": "room-id-uppercase",
+  "description": "create.begin whose room_id contains uppercase letters. §9.1 serializes room ids as lowercase ASCII; case-insensitive matching would make two ids collide in the relay registry.",
+  "frame_type": "create.begin",
+  "direction": "c2r",
+  "receiver": "relay",
+  "expect": {
+    "result": "reject",
+    "error_code": "invalid_message",
+    "rule": "V13",
+    "close": false
+  },
+  "wire": {
+    "kind": "text",
+    "json": {
+      "v": 0,
+      "type": "create.begin",
+      "request_id": "3f2a7c1e-9b4d-4e28-8a51-6c0d2e7f9b13",
+      "payload": {
+        "room_id": "Amber-River-Copper-Moon-Forest-Glass-Harbor-Star",
+        "password": "correct-horse-battery-staple-lentil-quartz"
+      }
+    }
+  }
+}

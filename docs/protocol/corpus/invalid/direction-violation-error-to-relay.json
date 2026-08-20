@@ -1,0 +1,25 @@
+{
+  "name": "direction-violation-error-to-relay",
+  "description": "A client sending an error frame to the relay. error is r2c only (§5.11).",
+  "frame_type": "error",
+  "direction": "c2r",
+  "receiver": "relay",
+  "expect": {
+    "result": "reject",
+    "error_code": "invalid_message",
+    "rule": "V11",
+    "close": true
+  },
+  "wire": {
+    "kind": "text",
+    "json": {
+      "v": 0,
+      "type": "error",
+      "request_id": "3f2a7c1e-9b4d-4e28-8a51-6c0d2e7f9b13",
+      "payload": {
+        "code": "internal_error",
+        "message": "nope"
+      }
+    }
+  }
+}

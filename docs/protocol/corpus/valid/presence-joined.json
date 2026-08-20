@@ -1,0 +1,22 @@
+{
+  "name": "presence-joined",
+  "description": "presence.joined broadcast after a successful join. participant_count is the count AFTER the event.",
+  "frame_type": "presence.joined",
+  "direction": "r2c",
+  "receiver": "client",
+  "expect": {
+    "result": "accept"
+  },
+  "wire": {
+    "kind": "text",
+    "json": {
+      "v": 0,
+      "type": "presence.joined",
+      "payload": {
+        "sender_id": "Kd8vN2pQ7rT4xW9yZa3bLc",
+        "username": "bright-fox-17",
+        "participant_count": 2
+      }
+    }
+  }
+}

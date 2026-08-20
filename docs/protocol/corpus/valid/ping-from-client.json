@@ -1,0 +1,19 @@
+{
+  "name": "ping-from-client",
+  "description": "Application-level ping from the client. Empty payload, required request_id.",
+  "frame_type": "ping",
+  "direction": "c2r",
+  "receiver": "relay",
+  "expect": {
+    "result": "accept"
+  },
+  "wire": {
+    "kind": "text",
+    "json": {
+      "v": 0,
+      "type": "ping",
+      "request_id": "7d1c0b93-6a4e-4c17-af52-3b9e8d0142c6",
+      "payload": {}
+    }
+  }
+}

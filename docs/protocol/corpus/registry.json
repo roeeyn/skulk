@@ -1,0 +1,47 @@
+{
+  "$comment": "Machine-readable form of docs/protocol-v0.md §5, §6, §7 and the §2.1/§4 limits. Both contract test suites read this file; it is the single source of truth for corpus coverage checks. Adding a frame type here without adding a valid vector for each of its directions fails the corpus-integrity test.",
+  "protocol_version": 0,
+  "corpus_version": 1,
+  "spec": "docs/protocol-v0.md",
+  "frame_types": [
+    { "type": "create.begin",    "directions": ["c2r"] },
+    { "type": "create.ok",       "directions": ["r2c"] },
+    { "type": "join.begin",      "directions": ["c2r"] },
+    { "type": "join.ok",         "directions": ["r2c"] },
+    { "type": "chat.send",       "directions": ["c2r"] },
+    { "type": "chat.message",    "directions": ["r2c"] },
+    { "type": "presence.joined", "directions": ["r2c"] },
+    { "type": "presence.left",   "directions": ["r2c"] },
+    { "type": "presence.list",   "directions": ["c2r", "r2c"] },
+    { "type": "room.expired",    "directions": ["r2c"] },
+    { "type": "ping",            "directions": ["c2r", "r2c"] },
+    { "type": "pong",            "directions": ["c2r", "r2c"] },
+    { "type": "error",           "directions": ["r2c"] }
+  ],
+  "error_codes": [
+    "room_not_found",
+    "room_already_exists",
+    "authentication_failed",
+    "room_expired",
+    "room_full",
+    "message_too_large",
+    "invalid_message",
+    "unsupported_protocol_version",
+    "unsupported_frame_type",
+    "internal_error"
+  ],
+  "validation_rules": [
+    "V1", "V2", "V3", "V4", "V5", "V6", "V7", "V8", "V9", "V10", "V11", "V12", "V13"
+  ],
+  "limits": {
+    "max_relay_frame_bytes": 16384,
+    "max_text_bytes": 4096,
+    "min_password_bytes": 12,
+    "max_password_bytes": 256,
+    "max_room_id_bytes": 160,
+    "max_username_bytes": 64,
+    "max_error_message_bytes": 256,
+    "min_sequence": 1,
+    "max_sequence": 9007199254740991
+  }
+}

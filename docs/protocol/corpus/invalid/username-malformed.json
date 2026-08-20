@@ -1,0 +1,25 @@
+{
+  "name": "username-malformed",
+  "description": "presence.joined whose username has no two-digit suffix (§6.4 format).",
+  "frame_type": "presence.joined",
+  "direction": "r2c",
+  "receiver": "client",
+  "expect": {
+    "result": "reject",
+    "error_code": "invalid_message",
+    "rule": "V13",
+    "close": false
+  },
+  "wire": {
+    "kind": "text",
+    "json": {
+      "v": 0,
+      "type": "presence.joined",
+      "payload": {
+        "sender_id": "Kd8vN2pQ7rT4xW9yZa3bLc",
+        "username": "bright-fox",
+        "participant_count": 2
+      }
+    }
+  }
+}

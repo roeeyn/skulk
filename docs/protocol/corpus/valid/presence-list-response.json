@@ -1,0 +1,31 @@
+{
+  "name": "presence-list-response",
+  "description": "The /who response: presence.list r2c echoing the request_id, with participant_count == len(participants).",
+  "frame_type": "presence.list",
+  "direction": "r2c",
+  "receiver": "client",
+  "expect": {
+    "result": "accept"
+  },
+  "wire": {
+    "kind": "text",
+    "json": {
+      "v": 0,
+      "type": "presence.list",
+      "request_id": "e4a91f7b-2c3d-4a58-9b06-8fd1c25e73a4",
+      "payload": {
+        "participants": [
+          {
+            "sender_id": "u3Bk9QzR2mXvLp7TnAeYwQ",
+            "username": "quiet-otter-42"
+          },
+          {
+            "sender_id": "Kd8vN2pQ7rT4xW9yZa3bLc",
+            "username": "bright-fox-17"
+          }
+        ],
+        "participant_count": 2
+      }
+    }
+  }
+}

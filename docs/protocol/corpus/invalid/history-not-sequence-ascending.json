@@ -1,0 +1,59 @@
+{
+  "name": "history-not-sequence-ascending",
+  "description": "join.ok whose history array is ordered newest-first. §15 requires sequence-ascending; delivery order is not history order.",
+  "frame_type": "join.ok",
+  "direction": "r2c",
+  "receiver": "client",
+  "expect": {
+    "result": "reject",
+    "error_code": "invalid_message",
+    "rule": "V13",
+    "close": false
+  },
+  "wire": {
+    "kind": "text",
+    "json": {
+      "v": 0,
+      "type": "join.ok",
+      "request_id": "b57c1d84-0e6a-4f3b-9c2d-71ae83f04d6b",
+      "payload": {
+        "room_id": "amber-river-copper-moon-forest-glass-harbor-star",
+        "sender_id": "Kd8vN2pQ7rT4xW9yZa3bLc",
+        "username": "bright-fox-17",
+        "expires_at": "2026-08-25T14:03:11.000Z",
+        "participants": [
+          {
+            "sender_id": "u3Bk9QzR2mXvLp7TnAeYwQ",
+            "username": "quiet-otter-42"
+          },
+          {
+            "sender_id": "Kd8vN2pQ7rT4xW9yZa3bLc",
+            "username": "bright-fox-17"
+          }
+        ],
+        "history": [
+          {
+            "room_id": "amber-river-copper-moon-forest-glass-harbor-star",
+            "message_id": "1a4d6f08-5c2b-4e93-8d71-0f3a6b9c2e58",
+            "sender_id": "Kd8vN2pQ7rT4xW9yZa3bLc",
+            "sender_username": "bright-fox-17",
+            "sequence": 2,
+            "received_at": "2026-08-20T14:08:03.907Z",
+            "text": "second message, retained in history"
+          },
+          {
+            "room_id": "amber-river-copper-moon-forest-glass-harbor-star",
+            "message_id": "9c1e5a20-4b7d-4f61-b8e3-2d5a7c0f1846",
+            "sender_id": "u3Bk9QzR2mXvLp7TnAeYwQ",
+            "sender_username": "quiet-otter-42",
+            "sequence": 1,
+            "received_at": "2026-08-20T14:07:52.418Z",
+            "text": "hello from the walking skeleton"
+          }
+        ],
+        "snapshot_sequence": 2
+      }
+    }
+  },
+  "notes": "At M4 the fold runs in sequence order over a contiguous run; a client that folds in array order would diverge from one that sorts."
+}

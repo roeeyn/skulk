@@ -1,0 +1,29 @@
+{
+  "name": "payload-field-wrong-type-sequence",
+  "description": "chat.message whose sequence is the string \"24\" rather than an integer.",
+  "frame_type": "chat.message",
+  "direction": "r2c",
+  "receiver": "client",
+  "expect": {
+    "result": "reject",
+    "error_code": "invalid_message",
+    "rule": "V12",
+    "close": false
+  },
+  "wire": {
+    "kind": "text",
+    "json": {
+      "v": 0,
+      "type": "chat.message",
+      "payload": {
+        "room_id": "amber-river-copper-moon-forest-glass-harbor-star",
+        "message_id": "9c1e5a20-4b7d-4f61-b8e3-2d5a7c0f1846",
+        "sender_id": "u3Bk9QzR2mXvLp7TnAeYwQ",
+        "sender_username": "quiet-otter-42",
+        "sequence": "24",
+        "received_at": "2026-08-20T14:07:52.418Z",
+        "text": "hello from the walking skeleton"
+      }
+    }
+  }
+}

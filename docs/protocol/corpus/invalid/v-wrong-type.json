@@ -1,0 +1,22 @@
+{
+  "name": "v-wrong-type",
+  "description": "v is the STRING \"0\" rather than the integer 0. A lenient coercing parser accepts this; both codecs must not.",
+  "frame_type": "ping",
+  "direction": "c2r",
+  "receiver": "relay",
+  "expect": {
+    "result": "reject",
+    "error_code": "invalid_message",
+    "rule": "V5",
+    "close": true
+  },
+  "wire": {
+    "kind": "text",
+    "json": {
+      "v": "0",
+      "type": "ping",
+      "request_id": "7d1c0b93-6a4e-4c17-af52-3b9e8d0142c6",
+      "payload": {}
+    }
+  }
+}
