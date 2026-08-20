@@ -413,6 +413,14 @@ defmodule Skulkd.TransportTest do
 
   # ---------------------------------------------------------------------------
 
+  # Why Mint here rather than Req, which would make this two lines:
+  #
+  # mint_web_socket is not optional — Req is built on Finch, and Finch is HTTP-only,
+  # so nothing in that stack can perform a WebSocket upgrade. Since Mint is already
+  # in the test env for that reason, this one HTTP request reuses it rather than
+  # pulling a second HTTP client (and finch, nimble_options, nimble_pool, castore)
+  # in for a single GET. The plumbing below is the price of that choice; it is
+  # confined to this helper.
   defp http_get(port, path) do
     {:ok, conn} = Mint.HTTP.connect(:http, "127.0.0.1", port)
     {:ok, conn, ref} = Mint.HTTP.request(conn, "GET", path, [], nil)
