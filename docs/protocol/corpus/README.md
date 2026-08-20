@@ -125,15 +125,15 @@ vectors over a real WebSocket.
 
 ```console
 cd skulkd
-mix test test/protocol_contract_test.exs    # red: the codec is missing
-mix test --exclude pending_codec            # green: integrity only
+mix test test/protocol_contract_test.exs    # the full corpus walk
+mix test                                    # everything; no exclusions since ROJ-32
 ```
 
-The seam is `validator!/0`, which checks `function_exported?(Skulkd.Protocol, :validate, 3)`
-and `flunk`s when the module does not exist yet. **ROJ-32 (M0-4) turns this green** by
-implementing `Skulkd.Protocol.validate/3`, which returns `:ok` or `{:error, code}` with `code`
-an atom (`:invalid_message`, …). The test compares `Atom.to_string(code)` against the
-vector's `error_code`.
+`Skulkd.Protocol.validate/3` returns `:ok` or `{:error, code}` with `code` an atom
+(`:invalid_message`, …); the test compares `Atom.to_string(code)` against the vector's
+`error_code`. Transport calls `decode/3` instead, which additionally returns the parsed frame
+and a `close?` flag — the fourth pass asserts that flag against each vector's `close`
+annotation.
 
 ### Both suites, same three passes
 
