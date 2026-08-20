@@ -419,6 +419,19 @@ defmodule Skulkd.RoomTest do
       assert {:error, :room_expired} = Rooms.join(room_id, Fixtures.password())
     end
 
+    test "expiry outranks a wrong password: the race resolves as room_expired" do
+      {clock, opts} = fake_time()
+      {room_id, _creator} = create(opts)
+
+      Clock.Fake.advance(clock, @ttl + 1)
+
+      # Spec §21: a join racing expiration must either join the still-active room or
+      # receive room_expired. The expiry guard runs before the password is even
+      # fetched, so an expired room answers room_expired whether the credential was
+      # right or wrong — and incidentally says nothing about which.
+      assert {:error, :room_expired} = Rooms.join(room_id, "wrong-password-entirely")
+    end
+
     test "a chat racing expiry fails with room_expired rather than being stored" do
       {clock, opts} = fake_time()
       {room_id, creator} = create(opts)
