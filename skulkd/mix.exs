@@ -14,11 +14,38 @@ defmodule Skulkd.MixProject do
   end
 
   # `mix test.integration` runs only test/integration (ROJ-35), re-including the
-  # :integration tag that test/test_helper.exs excludes from the fast loop. With no
-  # integration tests yet it runs zero tests and exits 0 — which is what lets CI's
-  # integration job be real before M0-7 exists.
+  # :integration tag that test/test_helper.exs excludes from the fast loop.
+  #
+  # The Go client is built first, because this suite drives real `skulk --headless`
+  # binaries through Ports — a stale binary would test yesterday's client against
+  # today's relay and pass.
   defp aliases do
-    ["test.integration": ["test test/integration --include integration"]]
+    ["test.integration": [&build_client/1, "test test/integration --include integration"]]
+  end
+
+  # CI builds the client itself and exports SKULK_BIN; locally we build on demand.
+  defp build_client(_args) do
+    case System.get_env("SKULK_BIN") do
+      path when is_binary(path) and path != "" ->
+        if File.exists?(path) do
+          Mix.shell().info("skulk client: using SKULK_BIN at #{path}")
+        else
+          Mix.raise("SKULK_BIN is set to #{path}, but nothing is there")
+        end
+
+      _ ->
+        root = Path.expand("..", __DIR__)
+        target = Path.join([root, "bin", "skulk"])
+        Mix.shell().info("skulk client: building #{target}")
+
+        case System.cmd("go", ["build", "-o", target, "./cmd/skulk"],
+               cd: root,
+               stderr_to_stdout: true
+             ) do
+          {_output, 0} -> System.put_env("SKULK_BIN", target)
+          {output, code} -> Mix.raise("go build failed (#{code}):\n#{output}")
+        end
+    end
   end
 
   # Without this, `mix test.integration` would run in :dev and fail to find the suite.
