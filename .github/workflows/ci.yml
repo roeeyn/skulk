@@ -67,23 +67,24 @@ jobs:
       # The other half of that bargain: assert the excluded tests are STILL failing.
       # Without this, `--exclude pending_codec` would be a place for real failures to
       # hide, and the day the codec lands nobody would notice the exclusion is stale.
+      # Output is CAPTURED, not streamed. setup-beam installs a problem matcher that
+      # turns every ExUnit failure line the runner sees into a GitHub annotation, and
+      # these 59 failures are the expected outcome — annotating them would put a wall of
+      # red on every PR and train everyone to ignore the annotation channel, the same
+      # habituation failure the design doc warns about for the M4 mismatch banner. The
+      # matcher stays enabled for the real `mix test` step above, where a failure IS news.
       - name: protocol contract tests must still be red (ROJ-32)
-        env:
-          # Elixir emits a GitHub annotation per test failure when GITHUB_ACTIONS=true.
-          # These 59 failures are the expected outcome, so annotating them would put a
-          # wall of red on every PR and train everyone to ignore the annotation channel
-          # — the same habituation failure the design doc warns about for the M4
-          # mismatch banner. The step's own exit code is the signal here.
-          GITHUB_ACTIONS: "false"
         run: |
-          if mix test --only pending_codec; then
+          if mix test --only pending_codec > pending.log 2>&1; then
+            cat pending.log
             echo "::error::The protocol v0 corpus now PASSES on the relay side."
             echo "::error::That is good news, and this step is now wrong. Remove the two"
             echo "::error::@describetag :pending_codec lines from"
             echo "::error::skulkd/test/protocol_contract_test.exs and delete this CI step."
             exit 1
           fi
-          echo "Protocol contract tests are still red, as ROJ-29 intended."
+          echo "Protocol contract tests are still red, as ROJ-29 intended:"
+          grep -E '[0-9]+ failures?' pending.log | tail -1
 
   # ---------------------------------------------------------------------------
   client:
@@ -119,16 +120,19 @@ jobs:
       - name: go test
         run: go test ./... -skip '^TestPendingCodec'
 
+      # Captured rather than streamed, for the same reason as the relay job's twin step.
       - name: protocol contract tests must still be red (ROJ-33)
         run: |
-          if go test ./internal/protocol -run '^TestPendingCodec'; then
+          if go test ./internal/protocol -run '^TestPendingCodec' > pending.log 2>&1; then
+            cat pending.log
             echo "::error::The protocol v0 corpus now PASSES on the client side."
             echo "::error::That is good news, and this step is now wrong. Drop the"
             echo "::error::TestPendingCodec_ prefix in internal/protocol/protocol_test.go"
             echo "::error::and delete this CI step."
             exit 1
           fi
-          echo "Protocol contract tests are still red, as ROJ-29 intended."
+          echo "Protocol contract tests are still red, as ROJ-29 intended:"
+          grep -cE '^--- FAIL' pending.log | xargs -I{} echo "{} pending test(s) failing"
 
   # ---------------------------------------------------------------------------
   # ExUnit drives everything (design A14): the relay boots in-process and real
