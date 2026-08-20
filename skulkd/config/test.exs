@@ -5,3 +5,7 @@ import Config
 # about. These are the minimum legal parameters, and because they live in test.exs
 # they cannot leak into dev or prod, which keep argon2_elixir's defaults.
 config :argon2_elixir, t_cost: 1, m_cost: 8
+
+# Each test starts its own Bandit on an ephemeral port; the application must not
+# claim a fixed one out from under them.
+config :skulkd, server: false

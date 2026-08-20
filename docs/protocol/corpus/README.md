@@ -116,7 +116,12 @@ see "Red by design" below.
 
 ### Elixir — `skulkd/test/protocol_contract_test.exs`
 
-Corpus path is `Path.expand("../../docs/protocol/corpus", __DIR__)`.
+Corpus loading lives in `skulkd/test/support/protocol_corpus.ex` (compiled via
+`elixirc_paths` for `:test`), which reads
+`Path.expand("../../../docs/protocol/corpus", __DIR__)` at compile time so each vector
+becomes its own ExUnit test. It is shared: `protocol_contract_test.exs` walks the whole
+corpus against the codec, and `transport_test.exs` replays the client-sent invalid
+vectors over a real WebSocket.
 
 ```console
 cd skulkd
@@ -142,25 +147,45 @@ vector's `error_code`.
 
 ## Current state
 
-Pass 1 passes in both languages. Passes 2 and 3 fail in both, with a message naming the
-ticket that implements the missing codec. That is the intended end state of an SDD spec
-ticket: the contract exists and is executable before anything satisfies it.
+**Elixir: green.** ROJ-32 implemented `Skulkd.Protocol.validate/3` and all 59 vectors pass,
+plus a fourth pass asserting each rejection's `close` annotation — the assertion this README
+promised would land with transport.
+
+**Go: still red.** `internal/protocol` has no codec until ROJ-33, so the two
+`TestPendingCodec_` tests fail with a message naming that ticket.
 
 ### Red by design, and how CI copes
 
-Plain `go test ./...` and `mix test` are **red on `main` right now, on purpose** — the red is
-the spec. So CI (ROJ-37) does not gate on "everything green"; it gates on both halves:
+While a codec is missing, plain `go test ./...` is **red on `main` on purpose** — the red is
+the spec. CI (ROJ-37) therefore does not gate on "everything green" for that language; it
+gates on both halves:
 
 | | Go | Elixir |
 | --- | --- | --- |
-| Must be **green** | `go test ./... -skip '^TestPendingCodec'` | `mix test --exclude pending_codec` |
-| Must be **red** | `go test ./internal/protocol -run '^TestPendingCodec'` | `mix test --only pending_codec` |
+| Must be **green** | `go test ./... -skip '^TestPendingCodec'` | `mix test` (no exclusions) |
+| Must be **red** | `go test ./internal/protocol -run '^TestPendingCodec'` | *(retired — see below)* |
 
-The second row is what keeps the first row honest: without it, the exclusion would be a place
-for real failures to hide. It also makes the scaffolding self-cleaning — **the day a codec
-lands, CI fails** until whoever landed it removes the marker (`TestPendingCodec_` prefix,
-`@describetag :pending_codec`) and the matching CI step. That is the intended handoff to
-ROJ-32 and ROJ-33, not an obstacle to it.
+The second row keeps the first honest: without it, the exclusion would be a place for real
+failures to hide. It also makes the scaffolding **self-cleaning**, and that has now been
+demonstrated once: implementing the relay codec turned the Elixir "must still be red" step
+into a failure whose message named the two `@describetag :pending_codec` lines to delete and
+told the author to remove the step. ROJ-32 did exactly that, in the same commit. The Go row
+stays until ROJ-33 repeats the trick.
+
+### What a real socket does and does not test
+
+`transport_test.exs` replays every **client-sent** invalid vector over a live WebSocket and
+asserts the same codes. Two vectors behave differently there, both correctly:
+
+- **r2c vectors are not replayed.** A frame the *client* is supposed to receive, sent to the
+  relay, is a direction violation (V11) — so it yields `invalid_message` rather than the code
+  annotated for a client receiving it. The unit-level walk covers both roles; that is what
+  the role parameter is for.
+- **`bytes-not-utf8` never reaches the application.** The WebSocket protocol requires text
+  frames to be valid UTF-8, so Bandit closes the connection with **1007** before `handle_in`
+  runs. That is a *stronger* rejection than V3, not a gap: the frame never becomes a frame.
+  The socket test asserts the connection dies; the unit walk still pins `invalid_message` for
+  the codec itself.
 
 ## Changing the corpus
 
