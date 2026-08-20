@@ -450,6 +450,11 @@ defmodule Skulkd.RoomTest do
 
       assert_received {:room_id, room_id}
 
+      # Prove the assertions below are not vacuous: something WAS logged, and the
+      # room is identified by the truncated digest §18.1 asks for.
+      assert log =~ "room created"
+      assert log =~ digest(room_id)
+
       refute log =~ password
       refute log =~ text
       refute log =~ room_id
@@ -459,6 +464,11 @@ defmodule Skulkd.RoomTest do
   end
 
   # ---------------------------------------------------------------------------
+
+  # The same truncated digest Skulkd.Room logs (spec §18.1).
+  defp digest(room_id) do
+    :sha256 |> :crypto.hash(room_id) |> Base.encode16(case: :lower) |> binary_part(0, 12)
+  end
 
   # A canonical lowercase UUIDv4: version nibble 4, variant bits 10, per protocol §4.
   defp uuid do
