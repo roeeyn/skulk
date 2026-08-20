@@ -59,32 +59,13 @@ jobs:
       - name: mix format --check-formatted
         run: mix format --check-formatted
 
-      # Excludes the protocol contract tests, which are red by design until ROJ-32
-      # implements Skulkd.Protocol.validate/3. Everything else must be green.
+      # No exclusions any more: ROJ-32 implemented Skulkd.Protocol.validate/3, so the
+      # relay's half of the golden corpus passes. The "must still be red" step that
+      # used to live here was deleted in the same commit, exactly as its own failure
+      # message instructed — that handoff is what it was built for. The client job
+      # keeps its equivalent until ROJ-33 lands the Go codec.
       - name: mix test
-        run: mix test --exclude pending_codec
-
-      # The other half of that bargain: assert the excluded tests are STILL failing.
-      # Without this, `--exclude pending_codec` would be a place for real failures to
-      # hide, and the day the codec lands nobody would notice the exclusion is stale.
-      # Output is CAPTURED, not streamed. setup-beam installs a problem matcher that
-      # turns every ExUnit failure line the runner sees into a GitHub annotation, and
-      # these 59 failures are the expected outcome — annotating them would put a wall of
-      # red on every PR and train everyone to ignore the annotation channel, the same
-      # habituation failure the design doc warns about for the M4 mismatch banner. The
-      # matcher stays enabled for the real `mix test` step above, where a failure IS news.
-      - name: protocol contract tests must still be red (ROJ-32)
-        run: |
-          if mix test --only pending_codec > pending.log 2>&1; then
-            cat pending.log
-            echo "::error::The protocol v0 corpus now PASSES on the relay side."
-            echo "::error::That is good news, and this step is now wrong. Remove the two"
-            echo "::error::@describetag :pending_codec lines from"
-            echo "::error::skulkd/test/protocol_contract_test.exs and delete this CI step."
-            exit 1
-          fi
-          echo "Protocol contract tests are still red, as ROJ-29 intended:"
-          grep -E '[0-9]+ failures?' pending.log | tail -1
+        run: mix test
 
   # ---------------------------------------------------------------------------
   client:

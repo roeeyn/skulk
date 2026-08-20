@@ -39,6 +39,74 @@ defmodule Skulkd.Frames do
     push("room.expired", %{"room_id" => room_id, "expired_at" => expired_at})
   end
 
+  @doc """
+  A relay→client response to a specific request, echoing its `request_id` verbatim
+  (§4.3). Distinct from `push/2`: broadcasts carry no correlation id, replies must.
+  """
+  @spec reply(String.t(), String.t() | nil, map()) :: map()
+  def reply(type, request_id, payload) do
+    frame = push(type, payload)
+    if request_id, do: Map.put(frame, "request_id", request_id), else: frame
+  end
+
+  @doc "`create.ok` (§5.2) — a new room has no history, so no snapshot fields (D8)."
+  def create_ok(request_id, session) do
+    reply("create.ok", request_id, %{
+      "room_id" => session.room_id,
+      "sender_id" => session.sender_id,
+      "username" => session.username,
+      "expires_at" => session.expires_at,
+      "participants" => session.participants
+    })
+  end
+
+  @doc "`join.ok` (§5.4) — carries the history snapshot and its boundary inline (D11)."
+  def join_ok(request_id, session) do
+    reply("join.ok", request_id, %{
+      "room_id" => session.room_id,
+      "sender_id" => session.sender_id,
+      "username" => session.username,
+      "expires_at" => session.expires_at,
+      "participants" => session.participants,
+      "history" => session.history,
+      "snapshot_sequence" => session.snapshot_sequence
+    })
+  end
+
+  @doc "The `/who` response (§5.8). `participant_count` must equal `length(participants)`."
+  def presence_list(request_id, participants) do
+    reply("presence.list", request_id, %{
+      "participants" => participants,
+      "participant_count" => length(participants)
+    })
+  end
+
+  @doc "`pong` (§5.10), echoing the ping's `request_id` — the only correlation available."
+  def pong(request_id), do: reply("pong", request_id, %{})
+
+  @doc """
+  An `error` frame (§5.11).
+
+  The message is human-readable and carries no machine meaning — clients branch on
+  `code` alone. It MUST NOT contain stack traces, secret material, password lengths,
+  or message text (spec §17, §18), which is why it is derived from the code here
+  rather than passed in from a call site that might have a password in scope.
+  """
+  def error(code, request_id \\ nil) do
+    reply("error", request_id, %{"code" => to_string(code), "message" => message(code)})
+  end
+
+  defp message(:room_not_found), do: "room not found"
+  defp message(:room_already_exists), do: "room already exists"
+  defp message(:authentication_failed), do: "authentication failed"
+  defp message(:room_expired), do: "room expired"
+  defp message(:room_full), do: "room is full"
+  defp message(:message_too_large), do: "message too large"
+  defp message(:invalid_message), do: "invalid message"
+  defp message(:unsupported_protocol_version), do: "unsupported protocol version"
+  defp message(:unsupported_frame_type), do: "unsupported frame type"
+  defp message(_), do: "internal error"
+
   defp presence(sender_id, username, participant_count) do
     %{"sender_id" => sender_id, "username" => username, "participant_count" => participant_count}
   end

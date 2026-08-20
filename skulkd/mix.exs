@@ -50,7 +50,10 @@ defmodule Skulkd.MixProject do
       # M0 room passwords (same hashing phx.gen.auth uses)
       {:argon2_elixir, "~> 4.0"},
       # Property-based tests for frame validation (§22.3 / A14)
-      {:stream_data, "~> 1.1", only: [:test, :dev]}
+      {:stream_data, "~> 1.1", only: [:test, :dev]},
+      # A raw WebSocket client for transport tests — raw on purpose: the corpus
+      # contains frames no well-behaved client would ever send (ROJ-32).
+      {:mint_web_socket, "~> 1.0", only: :test}
     ]
   end
 end

@@ -10,58 +10,6 @@
 # deliberate and is this ticket's deliverable. To turn it green, ROJ-32 implements
 # Skulkd.Protocol.validate/3; nothing in this file needs to change.
 
-defmodule Skulkd.ProtocolCorpus do
-  @moduledoc """
-  Loads `docs/protocol/corpus/` at compile time so each vector becomes its own
-  ExUnit test. Format: `docs/protocol/corpus/README.md`.
-  """
-
-  @dir Path.expand("../../docs/protocol/corpus", __DIR__)
-
-  def dir, do: @dir
-
-  def registry, do: read_json!(Path.join(@dir, "registry.json"))
-
-  def valid, do: load("valid")
-  def invalid, do: load("invalid")
-
-  def files do
-    [Path.join(@dir, "registry.json") | Path.wildcard(Path.join(@dir, "{valid,invalid}/*.json"))]
-  end
-
-  defp load(kind) do
-    @dir
-    |> Path.join("#{kind}/*.json")
-    |> Path.wildcard()
-    |> Enum.sort()
-    |> Enum.map(fn path -> Map.put(read_json!(path), "path", path) end)
-  end
-
-  defp read_json!(path), do: path |> File.read!() |> Jason.decode!()
-
-  @doc """
-  Reconstructs the exact frame bytes a vector describes. Exactly one of
-  `wire.json`, `wire.raw`, `wire.base64` is set.
-
-  `wire.json` is re-serialized compactly, so its byte length is not stable across
-  languages; vectors whose length is under test use `wire.raw`.
-  """
-  def frame_bytes(%{"wire" => wire}) do
-    case wire do
-      %{"json" => value} -> {:ok, Jason.encode!(value)}
-      %{"raw" => raw} when is_binary(raw) -> {:ok, raw}
-      %{"base64" => b64} when is_binary(b64) -> Base.decode64(b64)
-      _ -> :error
-    end
-  end
-
-  def receiver(%{"receiver" => "relay"}), do: :relay
-  def receiver(%{"receiver" => _}), do: :client
-
-  def kind(%{"wire" => %{"kind" => "binary"}}), do: :binary
-  def kind(%{"wire" => _}), do: :text
-end
-
 defmodule Skulkd.ProtocolContractTest do
   use ExUnit.Case, async: true
 
@@ -89,28 +37,6 @@ defmodule Skulkd.ProtocolContractTest do
   # still reject one as a direction violation.
   # ---------------------------------------------------------------------------
 
-  defp validator! do
-    Code.ensure_loaded(Skulkd.Protocol)
-
-    if function_exported?(Skulkd.Protocol, :validate, 3) do
-      &apply(Skulkd.Protocol, :validate, [&1, &2, &3])
-    else
-      flunk("""
-      protocol v0 codec is not implemented yet: Skulkd.Protocol.validate/3 is missing.
-
-        This failure is expected and is ROJ-29's deliverable: the corpus and both
-        contract harnesses exist before any codec does.
-
-        Implement it in ROJ-32 (M0-4) against docs/protocol-v0.md. The contract is
-        validate(receiver, kind, frame) :: :ok | {:error, code}, where code is an
-        atom such as :invalid_message.
-
-        The corpus-integrity tests in this file pass — so a red run here means a
-        missing codec, not a broken harness.
-      """)
-    end
-  end
-
   defp error_code(:ok), do: nil
   defp error_code({:error, code}) when is_atom(code), do: Atom.to_string(code)
   defp error_code({:error, code}) when is_binary(code), do: code
@@ -123,9 +49,8 @@ defmodule Skulkd.ProtocolContractTest do
   end
 
   defp validate(vector) do
-    validate = validator!()
     {:ok, frame} = Corpus.frame_bytes(vector)
-    error_code(validate.(Corpus.receiver(vector), Corpus.kind(vector), frame))
+    error_code(Skulkd.Protocol.validate(Corpus.receiver(vector), Corpus.kind(vector), frame))
   end
 
   # ---------------------------------------------------------------------------
@@ -231,13 +156,6 @@ defmodule Skulkd.ProtocolContractTest do
   # ---------------------------------------------------------------------------
 
   describe "valid vectors are accepted" do
-    # Red by design until ROJ-32 implements Skulkd.Protocol.validate/3. CI gates on
-    # `mix test --exclude pending_codec` (must be green) and separately asserts this
-    # tag's tests are still failing — so the day the codec lands, CI fails until this
-    # tag and that CI step are removed together. Plain `mix test` stays red on
-    # purpose: the red IS the spec.
-    @describetag :pending_codec
-
     for vector <- @valid do
       @vector vector
 
@@ -254,9 +172,33 @@ defmodule Skulkd.ProtocolContractTest do
     end
   end
 
-  describe "invalid vectors are rejected with the annotated code" do
-    @describetag :pending_codec
+  describe "invalid vectors close the connection exactly when the rule says so" do
+    # Promised by docs/protocol/corpus/README.md: "Wire up this assertion when
+    # transport lands in ROJ-32/ROJ-33." close? is a property of the RULE, not the
+    # code — message_too_large closes on V2 (oversized frame) but not on V13
+    # (oversized text), and unsupported_frame_type closes on V1 (binary) but not V8
+    # (unknown type). Skulkd.Conn reads this to decide whether to hang up.
+    for vector <- @invalid do
+      @vector vector
 
+      test vector["name"] do
+        vector = @vector
+        {:ok, frame} = Corpus.frame_bytes(vector)
+
+        assert {:error, _code, close?} =
+                 Skulkd.Protocol.decode(Corpus.receiver(vector), Corpus.kind(vector), frame)
+
+        assert close? == vector["expect"]["close"],
+               """
+               wrong close behaviour: got #{close?}, want #{vector["expect"]["close"]} (rule #{vector["expect"]["rule"]})
+                 #{vector["description"]}
+                 #{vector["path"]}
+               """
+      end
+    end
+  end
+
+  describe "invalid vectors are rejected with the annotated code" do
     for vector <- @invalid do
       @vector vector
 
