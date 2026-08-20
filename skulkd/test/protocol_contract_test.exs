@@ -231,6 +231,13 @@ defmodule Skulkd.ProtocolContractTest do
   # ---------------------------------------------------------------------------
 
   describe "valid vectors are accepted" do
+    # Red by design until ROJ-32 implements Skulkd.Protocol.validate/3. CI gates on
+    # `mix test --exclude pending_codec` (must be green) and separately asserts this
+    # tag's tests are still failing — so the day the codec lands, CI fails until this
+    # tag and that CI step are removed together. Plain `mix test` stays red on
+    # purpose: the red IS the spec.
+    @describetag :pending_codec
+
     for vector <- @valid do
       @vector vector
 
@@ -248,6 +255,8 @@ defmodule Skulkd.ProtocolContractTest do
   end
 
   describe "invalid vectors are rejected with the annotated code" do
+    @describetag :pending_codec
+
     for vector <- @invalid do
       @vector vector
 

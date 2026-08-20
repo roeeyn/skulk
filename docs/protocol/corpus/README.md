@@ -104,20 +104,24 @@ Corpus path is `../../docs/protocol/corpus`, relative to the package directory (
 with the working directory set to the package under test).
 
 ```console
-go test ./internal/protocol/...
+go test ./internal/protocol/...                              # red: the codec is missing
+go test ./internal/protocol/... -skip '^TestPendingCodec'    # green: integrity only
 ```
 
 The seam is `newValidator(t)` in the test file. It currently calls `t.Fatalf`, so every
 codec-dependent subtest fails. **ROJ-33 (M0-5) turns this green by replacing that one
 function body** with an adapter over the real codec — the corpus-walking code does not
-change.
+change. Those two tests carry a `TestPendingCodec_` prefix so CI can gate on the rest;
+see "Red by design" below.
 
 ### Elixir — `skulkd/test/protocol_contract_test.exs`
 
 Corpus path is `Path.expand("../../docs/protocol/corpus", __DIR__)`.
 
 ```console
-cd skulkd && mix test test/protocol_contract_test.exs
+cd skulkd
+mix test test/protocol_contract_test.exs    # red: the codec is missing
+mix test --exclude pending_codec            # green: integrity only
 ```
 
 The seam is `validator!/0`, which checks `function_exported?(Skulkd.Protocol, :validate, 3)`
@@ -136,11 +140,27 @@ vector's `error_code`.
 2. **Valid vectors** — the validator accepts each one.
 3. **Invalid vectors** — the validator rejects each one **with the annotated code**.
 
-## Current state (end of ROJ-29)
+## Current state
 
 Pass 1 passes in both languages. Passes 2 and 3 fail in both, with a message naming the
 ticket that implements the missing codec. That is the intended end state of an SDD spec
 ticket: the contract exists and is executable before anything satisfies it.
+
+### Red by design, and how CI copes
+
+Plain `go test ./...` and `mix test` are **red on `main` right now, on purpose** — the red is
+the spec. So CI (ROJ-37) does not gate on "everything green"; it gates on both halves:
+
+| | Go | Elixir |
+| --- | --- | --- |
+| Must be **green** | `go test ./... -skip '^TestPendingCodec'` | `mix test --exclude pending_codec` |
+| Must be **red** | `go test ./internal/protocol -run '^TestPendingCodec'` | `mix test --only pending_codec` |
+
+The second row is what keeps the first row honest: without it, the exclusion would be a place
+for real failures to hide. It also makes the scaffolding self-cleaning — **the day a codec
+lands, CI fails** until whoever landed it removes the marker (`TestPendingCodec_` prefix,
+`@describetag :pending_codec`) and the matching CI step. That is the intended handoff to
+ROJ-32 and ROJ-33, not an obstacle to it.
 
 ## Changing the corpus
 

@@ -7,8 +7,22 @@ defmodule Skulkd.MixProject do
       version: "0.1.0",
       elixir: "~> 1.18",
       start_permanent: Mix.env() == :prod,
-      deps: deps()
+      deps: deps(),
+      aliases: aliases()
     ]
+  end
+
+  # `mix test.integration` runs only test/integration (ROJ-35), re-including the
+  # :integration tag that test/test_helper.exs excludes from the fast loop. With no
+  # integration tests yet it runs zero tests and exits 0 — which is what lets CI's
+  # integration job be real before M0-7 exists.
+  defp aliases do
+    ["test.integration": ["test test/integration --include integration"]]
+  end
+
+  # Without this, `mix test.integration` would run in :dev and fail to find the suite.
+  def cli do
+    [preferred_envs: ["test.integration": :test]]
   end
 
   # Run "mix help compile.app" to learn about applications.

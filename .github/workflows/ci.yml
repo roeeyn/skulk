@@ -1,0 +1,175 @@
+name: CI
+
+# The fast loop only: relay tests, client tests, and the integration lane, on every
+# push to main and every PR. Cross-platform build matrix, release artifacts, and the
+# Docker relay image are M5 (ROJ-38+) and deliberately not here. Target: under 5 minutes.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A new push to a PR makes the in-flight run obsolete; don't pay for it twice.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned so local and CI agree (ROJ-37 acceptance criterion).
+  #
+  # The ticket says "OTP 25". That is a misreading of `elixir --version`, whose
+  # "(compiled with Erlang/OTP 25)" line reports the OTP release the Elixir BUILD was
+  # made against — not the runtime. The development runtime here is OTP 27
+  # (erlang:system_info(otp_release)), so 27 is the pin that actually makes local and
+  # CI agree. Do not "correct" this back to 25 without checking the runtime first.
+  ELIXIR_VERSION: "1.18"
+  OTP_VERSION: "27"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  relay:
+    name: relay · Elixir
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: skulkd
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Erlang/OTP + Elixir
+        uses: erlef/setup-beam@v1
+        id: beam
+        with:
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+          otp-version: ${{ env.OTP_VERSION }}
+
+      # actions/cache paths are workspace-relative, not job-working-directory-relative.
+      - name: Cache deps and _build
+        uses: actions/cache@v4
+        with:
+          path: |
+            skulkd/deps
+            skulkd/_build
+          key: mix-${{ runner.os }}-otp${{ steps.beam.outputs.otp-version }}-elixir${{ steps.beam.outputs.elixir-version }}-${{ hashFiles('skulkd/mix.lock') }}
+          restore-keys: |
+            mix-${{ runner.os }}-otp${{ steps.beam.outputs.otp-version }}-elixir${{ steps.beam.outputs.elixir-version }}-
+
+      - run: mix deps.get
+
+      - name: mix format --check-formatted
+        run: mix format --check-formatted
+
+      # Excludes the protocol contract tests, which are red by design until ROJ-32
+      # implements Skulkd.Protocol.validate/3. Everything else must be green.
+      - name: mix test
+        run: mix test --exclude pending_codec
+
+      # The other half of that bargain: assert the excluded tests are STILL failing.
+      # Without this, `--exclude pending_codec` would be a place for real failures to
+      # hide, and the day the codec lands nobody would notice the exclusion is stale.
+      - name: protocol contract tests must still be red (ROJ-32)
+        run: |
+          if mix test --only pending_codec; then
+            echo "::error::The protocol v0 corpus now PASSES on the relay side."
+            echo "::error::That is good news, and this step is now wrong. Remove the two"
+            echo "::error::@describetag :pending_codec lines from"
+            echo "::error::skulkd/test/protocol_contract_test.exs and delete this CI step."
+            exit 1
+          fi
+          echo "Protocol contract tests are still red, as ROJ-29 intended."
+
+  # ---------------------------------------------------------------------------
+  client:
+    name: client · Go
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          # Read from go.mod so the toolchain can never drift from the repo's own pin.
+          go-version-file: go.mod
+          # There is no go.sum yet (zero dependencies); key the cache off go.mod.
+          cache-dependency-path: go.mod
+
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt needs to run on:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - run: go vet ./...
+
+      - run: go build ./...
+
+      # Skips the protocol contract tests, red by design until ROJ-33 implements the
+      # codec in internal/protocol. Everything else must be green.
+      - name: go test
+        run: go test ./... -skip '^TestPendingCodec'
+
+      - name: protocol contract tests must still be red (ROJ-33)
+        run: |
+          if go test ./internal/protocol -run '^TestPendingCodec'; then
+            echo "::error::The protocol v0 corpus now PASSES on the client side."
+            echo "::error::That is good news, and this step is now wrong. Drop the"
+            echo "::error::TestPendingCodec_ prefix in internal/protocol/protocol_test.go"
+            echo "::error::and delete this CI step."
+            exit 1
+          fi
+          echo "Protocol contract tests are still red, as ROJ-29 intended."
+
+  # ---------------------------------------------------------------------------
+  # ExUnit drives everything (design A14): the relay boots in-process and real
+  # `skulk --headless` binaries are driven through Ports. Runs one seed test until
+  # ROJ-35 lands the suite proper.
+  integration:
+    name: integration · ExUnit drives the Go client
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [relay, client]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Erlang/OTP + Elixir
+        uses: erlef/setup-beam@v1
+        id: beam
+        with:
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+          otp-version: ${{ env.OTP_VERSION }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.mod
+
+      # Same key as the relay job, so this job restores that job's cache instead of
+      # recompiling every dependency from scratch.
+      - name: Cache deps and _build
+        uses: actions/cache@v4
+        with:
+          path: |
+            skulkd/deps
+            skulkd/_build
+          key: mix-${{ runner.os }}-otp${{ steps.beam.outputs.otp-version }}-elixir${{ steps.beam.outputs.elixir-version }}-${{ hashFiles('skulkd/mix.lock') }}
+          restore-keys: |
+            mix-${{ runner.os }}-otp${{ steps.beam.outputs.otp-version }}-elixir${{ steps.beam.outputs.elixir-version }}-
+
+      - name: Build the client
+        run: go build -o bin/skulk ./cmd/skulk
+
+      - name: mix deps.get
+        working-directory: skulkd
+        run: mix deps.get
+
+      - name: mix test.integration
+        working-directory: skulkd
+        env:
+          # ROJ-35's harness reads this rather than building the client itself.
+          SKULK_BIN: ${{ github.workspace }}/bin/skulk
+        run: mix test.integration

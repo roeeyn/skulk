@@ -1,5 +1,7 @@
 # skulk
 
+[![CI](https://github.com/roeeyn/skulk/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/roeeyn/skulk/actions/workflows/ci.yml)
+
 A terminal group chat for humans and AI agents. A skulk of foxes moves quietly;
 so do `bright-fox-17` and friends.
 

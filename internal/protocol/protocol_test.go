@@ -364,9 +364,15 @@ func TestCorpusIntegrity(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // Pass 2 and 3 — the codec contract. Both fail until ROJ-33 lands.
+//
+// The TestPendingCodec_ prefix is the Go half of the "red by design" convention.
+// CI gates on `go test ./... -skip '^TestPendingCodec'` (must be green) and
+// separately asserts these are still failing — so the day the codec lands, CI
+// fails until the prefix and that CI step are removed together. Plain
+// `go test ./...` stays red on purpose: the red IS the spec.
 // ---------------------------------------------------------------------------
 
-func TestValidVectorsAreAccepted(t *testing.T) {
+func TestPendingCodec_ValidVectorsAreAccepted(t *testing.T) {
 	c := loadCorpus(t)
 	validate := newValidator(t)
 
@@ -384,7 +390,7 @@ func TestValidVectorsAreAccepted(t *testing.T) {
 	}
 }
 
-func TestInvalidVectorsAreRejectedWithTheAnnotatedCode(t *testing.T) {
+func TestPendingCodec_InvalidVectorsAreRejectedWithTheAnnotatedCode(t *testing.T) {
 	c := loadCorpus(t)
 	validate := newValidator(t)
 
