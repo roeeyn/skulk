@@ -62,8 +62,8 @@ jobs:
       # No exclusions any more: ROJ-32 implemented Skulkd.Protocol.validate/3, so the
       # relay's half of the golden corpus passes. The "must still be red" step that
       # used to live here was deleted in the same commit, exactly as its own failure
-      # message instructed — that handoff is what it was built for. The client job
-      # keeps its equivalent until ROJ-33 lands the Go codec.
+      # message instructed — that handoff is what it was built for. The client job's
+      # twin retired the same way one ticket later.
       - name: mix test
         run: mix test
 
@@ -80,8 +80,9 @@ jobs:
         with:
           # Read from go.mod so the toolchain can never drift from the repo's own pin.
           go-version-file: go.mod
-          # There is no go.sum yet (zero dependencies); key the cache off go.mod.
-          cache-dependency-path: go.mod
+          # go.sum exists as of ROJ-33 (the client gained a WebSocket library), so the
+          # cache keys off the exact dependency versions rather than the module file.
+          cache-dependency-path: go.sum
 
       - name: gofmt
         run: |
@@ -96,24 +97,14 @@ jobs:
 
       - run: go build ./...
 
-      # Skips the protocol contract tests, red by design until ROJ-33 implements the
-      # codec in internal/protocol. Everything else must be green.
+      # No skips any more: ROJ-33 implemented internal/protocol, so the client's half
+      # of the golden corpus passes. The "must still be red" step that used to live
+      # here was deleted in the same commit, exactly as its own failure message
+      # instructed — the second and last time that handoff fires. Both languages now
+      # agree on all 59 vectors, which is design A13's central claim finally enforced
+      # rather than promised.
       - name: go test
-        run: go test ./... -skip '^TestPendingCodec'
-
-      # Captured rather than streamed, for the same reason as the relay job's twin step.
-      - name: protocol contract tests must still be red (ROJ-33)
-        run: |
-          if go test ./internal/protocol -run '^TestPendingCodec' > pending.log 2>&1; then
-            cat pending.log
-            echo "::error::The protocol v0 corpus now PASSES on the client side."
-            echo "::error::That is good news, and this step is now wrong. Drop the"
-            echo "::error::TestPendingCodec_ prefix in internal/protocol/protocol_test.go"
-            echo "::error::and delete this CI step."
-            exit 1
-          fi
-          echo "Protocol contract tests are still red, as ROJ-29 intended:"
-          grep -cE '^--- FAIL' pending.log | xargs -I{} echo "{} pending test(s) failing"
+        run: go test ./...
 
   # ---------------------------------------------------------------------------
   # ExUnit drives everything (design A14): the relay boots in-process and real
@@ -138,7 +129,7 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-          cache-dependency-path: go.mod
+          cache-dependency-path: go.sum
 
       # Same key as the relay job, so this job restores that job's cache instead of
       # recompiling every dependency from scratch.

@@ -104,15 +104,13 @@ Corpus path is `../../docs/protocol/corpus`, relative to the package directory (
 with the working directory set to the package under test).
 
 ```console
-go test ./internal/protocol/...                              # red: the codec is missing
-go test ./internal/protocol/... -skip '^TestPendingCodec'    # green: integrity only
+go test ./internal/protocol/...
 ```
 
-The seam is `newValidator(t)` in the test file. It currently calls `t.Fatalf`, so every
-codec-dependent subtest fails. **ROJ-33 (M0-5) turns this green by replacing that one
-function body** with an adapter over the real codec — the corpus-walking code does not
-change. Those two tests carry a `TestPendingCodec_` prefix so CI can gate on the rest;
-see "Red by design" below.
+The seam is `newValidator(t)` in the test file. ROJ-29 shipped it as a `t.Fatalf` stub;
+ROJ-33 replaced that one function body with an adapter over `protocol.Validate` and nothing
+else in the file changed, which is what the seam was shaped for. A fourth pass asserts that
+`protocol.Encode` round-trips every valid vector idempotently.
 
 ### Elixir — `skulkd/test/protocol_contract_test.exs`
 
@@ -147,30 +145,34 @@ annotation.
 
 ## Current state
 
-**Elixir: green.** ROJ-32 implemented `Skulkd.Protocol.validate/3` and all 59 vectors pass,
-plus a fourth pass asserting each rejection's `close` annotation — the assertion this README
-promised would land with transport.
+**Both languages green.** `Skulkd.Protocol.validate/3` (ROJ-32) and `protocol.Validate`
+(ROJ-33) accept and reject all 59 vectors identically, with identical codes.
 
-**Go: still red.** `internal/protocol` has no codec until ROJ-33, so the two
-`TestPendingCodec_` tests fail with a message naming that ticket.
+That sentence is the point of this whole directory. Design A13 traded a shared Rust crate
+for two independent codecs, and from ROJ-29 until now, "the two implementations agree" was a
+promise. It is now a test that runs on every push — the first time A13's central claim is
+enforced rather than asserted.
 
-### Red by design, and how CI copes
+Each language adds one pass of its own on top of the shared three:
 
-While a codec is missing, plain `go test ./...` is **red on `main` on purpose** — the red is
-the spec. CI (ROJ-37) therefore does not gate on "everything green" for that language; it
-gates on both halves:
+| | Extra pass |
+| --- | --- |
+| Elixir | `close?` matches each invalid vector's `close` annotation (transport needs it) |
+| Go | `Encode(Decode(v))` is idempotent and re-decodes (the client re-emits frames) |
 
-| | Go | Elixir |
-| --- | --- | --- |
-| Must be **green** | `go test ./... -skip '^TestPendingCodec'` | `mix test` (no exclusions) |
-| Must be **red** | `go test ./internal/protocol -run '^TestPendingCodec'` | *(retired — see below)* |
+### The scaffolding that got here, and how it cleaned itself up
 
-The second row keeps the first honest: without it, the exclusion would be a place for real
-failures to hide. It also makes the scaffolding **self-cleaning**, and that has now been
-demonstrated once: implementing the relay codec turned the Elixir "must still be red" step
-into a failure whose message named the two `@describetag :pending_codec` lines to delete and
-told the author to remove the step. ROJ-32 did exactly that, in the same commit. The Go row
-stays until ROJ-33 repeats the trick.
+From ROJ-29 until each codec landed, plain `go test ./...` / `mix test` were **red on `main`
+on purpose** — the red was the spec. CI (ROJ-37) gated on both halves of that bargain: a
+green gate that skipped the pending tests, and a **must-still-be-red** gate asserting they
+were still failing. The second kept the first honest — without it, the exclusion would have
+been a place for real failures to hide.
+
+It also made the scaffolding self-cleaning, and it fired exactly twice, as designed.
+Implementing each codec turned its "must still be red" step into a failure whose message
+named the marker to delete and told the author to remove the step; ROJ-32 and ROJ-33 each did
+both in the same commit. **Nothing of it remains** — no tags, no prefixes, no CI steps — and
+the gates are now plain `mix test` and `go test ./...`.
 
 ### What a real socket does and does not test
 
