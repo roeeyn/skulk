@@ -399,6 +399,12 @@ defmodule Skulkd.TransportTest do
             )
         end)
 
+      # Prove the refutes are not vacuous. Test env runs Logger at :debug, so the
+      # rejection path's line IS captured — which is the point: that path handles a
+      # frame someone got wrong, making it the likeliest place for contents to leak
+      # into a log, and it must log the code and nothing else.
+      assert log =~ "rejecting frame: invalid_message"
+
       refute log =~ password
       refute log =~ text
       refute log =~ room_id
