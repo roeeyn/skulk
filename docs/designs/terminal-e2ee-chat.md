@@ -7,13 +7,13 @@ Repo: roeeyn/e2e-chat (product name: **skulk**)
 Status: APPROVED
 Mode: Builder
 
-> **Normative:** Amendments (A0–A14), Success Criteria, Distribution Plan, Next Steps.
+> **Normative:** Amendments (A0–A15), Success Criteria, Distribution Plan, Next Steps.
 > An implementer follows those.
 > **Non-normative:** everything else — Problem Statement, What Makes This Cool,
 > Constraints, Premises, Landscape, Cross-Model Perspective, Approaches Considered,
 > Decisions Pending, The Assignment, What I noticed. Background, not requirements.
 >
-> **Authority:** A0–A14 are folded into `terminal_chat_mvp_spec.md` as **spec v1.1**
+> **Authority:** A0–A15 are folded into `terminal_chat_mvp_spec.md` as **spec v1.1**
 > before implementation begins (see Next Steps step 4 for the staging). The spec is
 > then the single authority an implementer follows. Per §27, `docs/deviations.md`
 > records only implementation-time deviations *from v1.1* — it is not a second home
@@ -441,6 +441,28 @@ decided in eng review with the tolls priced).
   `Skulkd.Room` takes an injectable clock so §22.1's TTL boundary tests run on a fake
   clock.
 
+**A15 — AI agents are first-class users; `--headless` is a contract, not a test seam.**
+The product serves both humans (TUI) and AI agents chatting with each other or with
+humans. Agents already fit the model — no accounts, no CAPTCHA, random usernames, JSON
+protocol — so this amendment promotes the accidental capability to a promise:
+
+- **The headless line protocol (newline-delimited JSON on stdin/stdout) is documented and
+  versioned** in `docs/headless-v1.md`, with its own version field independent of wire
+  protocol v1. Breaking changes to it are breaking releases, not test-harness refactors.
+  The ExUnit harness consumes the same documented contract agents do — the tests ARE the
+  compatibility suite.
+- **Secrets in headless mode flow only as JSON messages on stdin** — never argv (visible
+  in process listings and shell history, which §20 already forbids), never environment
+  variables. Headless `create` returns the generated passphrase in its JSON response and
+  skips the human confirm/copy loops (§9.2's confirmation and A5's Enter-to-accept are
+  TUI-only behaviors).
+- **Known constraint, documented:** the 4,096-byte plaintext cap (§8) applies to agents
+  too; structured payloads chunk at the application layer. Revisit only if real agent
+  usage demands it — not speculatively.
+- **M4 note:** two agents with a side channel can automate `/checkpoint` comparison —
+  machine-verified relay honesty with no spoken ritual. This is the usage-gated feature's
+  most likely first real user; record it as the M4 trigger condition.
+
 ### Terminal wireframe
 
 `docs/design/tui-wireframe-v1.html` (rendered: `tui-wireframe-v1.png`) sketches the states
@@ -517,6 +539,10 @@ the security claim.
       room members continue receiving messages.
 - [ ] `skulk --headless` completes a full create → join → chat → `/checkpoint` cycle
       driven entirely over stdin/stdout by the ExUnit harness.
+- [ ] The headless protocol matches `docs/headless-v1.md` (A15); no secret ever appears
+      in argv or environment; headless `create` returns the passphrase in JSON with no
+      interactive confirm loop. Two headless instances (i.e., two agents) can hold a
+      conversation with no TTY attached.
 
 ## Distribution Plan
 
@@ -556,9 +582,12 @@ room under DynamicSupervisor + Registry (atomic creation); random usernames; pre
 (`presence.joined/left`, `/who`); in-memory history with snapshot-on-join; TTL with the
 timer-abstraction seam; room passwords via **argon2id** (`argon2_elixir` — the same
 hashing `phx.gen.auth` uses; no Phoenix) — password sent over wss, hashed at the relay.
-`skulk`: bubbletea TUI + `--headless` line mode; create / join / chat; `/help`, `/who`,
-`/quit`; Ctrl+C semantics. First ExUnit integration test: boots relay, drives two headless
-clients through Ports, exchanges Unicode both ways.
+`skulk`: bubbletea TUI + `--headless` line mode per the A15 contract (documented framing,
+stdin-JSON secrets, non-interactive create) — which makes AI agents first-class users from
+M0, not an afterthought; create / join / chat; `/help`, `/who`, `/quit`; Ctrl+C semantics.
+First ExUnit integration test: boots relay, drives two headless clients through Ports,
+exchanges Unicode both ways — which is also, by construction, the first agent-to-agent
+conversation.
 **Honesty gate (spec §27): M0's README states in plain words that the relay can read all
 messages and E2EE is a later milestone. v0 is never described as private or E2EE.**
 
@@ -588,7 +617,7 @@ forger + fold test vector land here.
 relay image, `docs/self-hosting.md`, checksums — per the Distribution Plan. Full §23
 acceptance suite (as amended) runs here.
 
-**Spec v1.1 fold:** A0, A3, A4, A5, A8, A10, A11, A12, A13 fold into the committed spec
+**Spec v1.1 fold:** A0, A3, A4, A5, A8, A10, A11, A12, A13, A15 fold into the committed spec
 (`docs/spec/terminal_chat_mvp_spec.md`) before M0 code grows past the skeleton; A1, A2,
 A6, A7, A9, A14 fold at the milestone where their features land. The §23 acceptance
 checklist becomes the M5 gate, not the M0 gate.
