@@ -1,0 +1,25 @@
+{
+  "name": "envelope-unknown-field",
+  "description": "Unknown envelope keys AND unknown payload keys must be IGNORED, not rejected (§3, decision D3).",
+  "frame_type": "chat.send",
+  "direction": "c2r",
+  "receiver": "relay",
+  "expect": {
+    "result": "accept"
+  },
+  "wire": {
+    "kind": "text",
+    "json": {
+      "v": 0,
+      "type": "chat.send",
+      "request_id": "3f2a7c1e-9b4d-4e28-8a51-6c0d2e7f9b13",
+      "payload": {
+        "message_id": "9c1e5a20-4b7d-4f61-b8e3-2d5a7c0f1846",
+        "text": "forward compatibility",
+        "nonce": "ignored-by-v0"
+      },
+      "trace_id": "ignored-by-v0"
+    }
+  },
+  "notes": "This is how M1-M3 add fields without breaking v0 readers. An implementation with a strict/exact-match decoder fails here — which is the point."
+}

@@ -1,0 +1,21 @@
+{
+  "name": "payload-missing",
+  "description": "No payload field. It is always present, even when empty (§3).",
+  "frame_type": "ping",
+  "direction": "c2r",
+  "receiver": "relay",
+  "expect": {
+    "result": "reject",
+    "error_code": "invalid_message",
+    "rule": "V10",
+    "close": false
+  },
+  "wire": {
+    "kind": "text",
+    "json": {
+      "v": 0,
+      "type": "ping",
+      "request_id": "7d1c0b93-6a4e-4c17-af52-3b9e8d0142c6"
+    }
+  }
+}

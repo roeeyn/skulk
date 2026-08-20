@@ -1,0 +1,23 @@
+{
+  "name": "v-unsupported-with-unknown-type",
+  "description": "v is 3 AND type is unknown to v0. V6 precedes V8: type cannot be interpreted without knowing the version that defines it.",
+  "frame_type": null,
+  "direction": "c2r",
+  "receiver": "relay",
+  "expect": {
+    "result": "reject",
+    "error_code": "unsupported_protocol_version",
+    "rule": "V6",
+    "close": true
+  },
+  "wire": {
+    "kind": "text",
+    "json": {
+      "v": 3,
+      "type": "chat.encrypted",
+      "request_id": "3f2a7c1e-9b4d-4e28-8a51-6c0d2e7f9b13",
+      "payload": {}
+    }
+  },
+  "notes": "This vector exists to pin RULE ORDER, not field validity. An implementation that checks the type registry first emits unsupported_frame_type and disagrees with the other language."
+}

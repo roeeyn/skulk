@@ -1,0 +1,21 @@
+{
+  "name": "request-id-missing-on-ping",
+  "description": "ping without a request_id. It is required there because the pong echo is the only correlation available (§4.3).",
+  "frame_type": "ping",
+  "direction": "c2r",
+  "receiver": "relay",
+  "expect": {
+    "result": "reject",
+    "error_code": "invalid_message",
+    "rule": "V9",
+    "close": false
+  },
+  "wire": {
+    "kind": "text",
+    "json": {
+      "v": 0,
+      "type": "ping",
+      "payload": {}
+    }
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "name": "create-begin",
+  "description": "Minimal well-formed create.begin: the only c2r frame besides join.begin that carries a password.",
+  "frame_type": "create.begin",
+  "direction": "c2r",
+  "receiver": "relay",
+  "expect": {
+    "result": "accept"
+  },
+  "wire": {
+    "kind": "text",
+    "json": {
+      "v": 0,
+      "type": "create.begin",
+      "request_id": "3f2a7c1e-9b4d-4e28-8a51-6c0d2e7f9b13",
+      "payload": {
+        "room_id": "amber-river-copper-moon-forest-glass-harbor-star",
+        "password": "correct-horse-battery-staple-lentil-quartz"
+      }
+    }
+  },
+  "notes": "request_id is required on create.begin (spec §4.3). The password travels here and nowhere else (§8)."
+}

@@ -1,0 +1,25 @@
+{
+  "name": "error-code-unknown",
+  "description": "An error frame carrying a code outside the §6 registry. Clients branch on code, so an unrecognized one is unactionable.",
+  "frame_type": "error",
+  "direction": "r2c",
+  "receiver": "client",
+  "expect": {
+    "result": "reject",
+    "error_code": "invalid_message",
+    "rule": "V13",
+    "close": false
+  },
+  "wire": {
+    "kind": "text",
+    "json": {
+      "v": 0,
+      "type": "error",
+      "request_id": "3f2a7c1e-9b4d-4e28-8a51-6c0d2e7f9b13",
+      "payload": {
+        "code": "im_a_teapot",
+        "message": "short and stout"
+      }
+    }
+  }
+}

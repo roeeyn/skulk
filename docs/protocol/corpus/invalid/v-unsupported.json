@@ -1,0 +1,22 @@
+{
+  "name": "v-unsupported",
+  "description": "v is 1 — a version this implementation does not speak. Reported as a version problem, not a generic invalid frame.",
+  "frame_type": "ping",
+  "direction": "c2r",
+  "receiver": "relay",
+  "expect": {
+    "result": "reject",
+    "error_code": "unsupported_protocol_version",
+    "rule": "V6",
+    "close": true
+  },
+  "wire": {
+    "kind": "text",
+    "json": {
+      "v": 1,
+      "type": "ping",
+      "request_id": "7d1c0b93-6a4e-4c17-af52-3b9e8d0142c6",
+      "payload": {}
+    }
+  }
+}

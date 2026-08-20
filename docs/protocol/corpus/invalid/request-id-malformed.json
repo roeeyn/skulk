@@ -1,0 +1,23 @@
+{
+  "name": "request-id-malformed",
+  "description": "request_id is a UUID with version nibble 1, not 4.",
+  "frame_type": "ping",
+  "direction": "c2r",
+  "receiver": "relay",
+  "expect": {
+    "result": "reject",
+    "error_code": "invalid_message",
+    "rule": "V9",
+    "close": false
+  },
+  "wire": {
+    "kind": "text",
+    "json": {
+      "v": 0,
+      "type": "ping",
+      "request_id": "3f2a7c1e-9b4d-1e28-8a51-6c0d2e7f9b13",
+      "payload": {}
+    }
+  },
+  "notes": "Uppercase hex and a non-[89ab] variant nibble are rejected on the same rule — §4 accepts exactly one spelling."
+}

@@ -1,0 +1,25 @@
+{
+  "name": "type-unknown",
+  "description": "A syntactically perfect envelope whose type is outside the v0 registry. Does NOT close the connection — one mistyped frame from an agent deserves a diagnosis, not a hang-up.",
+  "frame_type": null,
+  "direction": "c2r",
+  "receiver": "relay",
+  "expect": {
+    "result": "reject",
+    "error_code": "unsupported_frame_type",
+    "rule": "V8",
+    "close": false
+  },
+  "wire": {
+    "kind": "text",
+    "json": {
+      "v": 0,
+      "type": "chat.whisper",
+      "request_id": "3f2a7c1e-9b4d-4e28-8a51-6c0d2e7f9b13",
+      "payload": {
+        "text": "hi"
+      }
+    }
+  },
+  "notes": "Contrast with §3's unknown-FIELD rule: unknown fields are ignored, an unknown type is rejected (§7.2)."
+}

@@ -1,0 +1,22 @@
+{
+  "name": "join-begin",
+  "description": "Minimal well-formed join.begin. Payload shape is identical to create.begin.",
+  "frame_type": "join.begin",
+  "direction": "c2r",
+  "receiver": "relay",
+  "expect": {
+    "result": "accept"
+  },
+  "wire": {
+    "kind": "text",
+    "json": {
+      "v": 0,
+      "type": "join.begin",
+      "request_id": "b57c1d84-0e6a-4f3b-9c2d-71ae83f04d6b",
+      "payload": {
+        "room_id": "amber-river-copper-moon-forest-glass-harbor-star",
+        "password": "correct-horse-battery-staple-lentil-quartz"
+      }
+    }
+  }
+}

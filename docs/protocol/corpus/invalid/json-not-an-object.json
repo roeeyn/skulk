@@ -1,0 +1,17 @@
+{
+  "name": "json-not-an-object",
+  "description": "Well-formed JSON whose top-level value is an array. The envelope must be an object (§3).",
+  "frame_type": null,
+  "direction": "c2r",
+  "receiver": "relay",
+  "expect": {
+    "result": "reject",
+    "error_code": "invalid_message",
+    "rule": "V4",
+    "close": true
+  },
+  "wire": {
+    "kind": "text",
+    "raw": "[0,\"ping\",{}]"
+  }
+}

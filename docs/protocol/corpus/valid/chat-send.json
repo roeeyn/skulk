@@ -1,0 +1,21 @@
+{
+  "name": "chat-send",
+  "description": "Minimal chat.send. No room_id (D12); message_id is client-generated (D10); request_id is optional and omitted here.",
+  "frame_type": "chat.send",
+  "direction": "c2r",
+  "receiver": "relay",
+  "expect": {
+    "result": "accept"
+  },
+  "wire": {
+    "kind": "text",
+    "json": {
+      "v": 0,
+      "type": "chat.send",
+      "payload": {
+        "message_id": "9c1e5a20-4b7d-4f61-b8e3-2d5a7c0f1846",
+        "text": "hello from the walking skeleton"
+      }
+    }
+  }
+}

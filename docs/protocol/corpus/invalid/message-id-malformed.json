@@ -1,0 +1,25 @@
+{
+  "name": "message-id-malformed",
+  "description": "chat.send whose message_id is missing a hex group. The most common UUID defect and the one the ticket names.",
+  "frame_type": "chat.send",
+  "direction": "c2r",
+  "receiver": "relay",
+  "expect": {
+    "result": "reject",
+    "error_code": "invalid_message",
+    "rule": "V13",
+    "close": false
+  },
+  "wire": {
+    "kind": "text",
+    "json": {
+      "v": 0,
+      "type": "chat.send",
+      "request_id": "3f2a7c1e-9b4d-4e28-8a51-6c0d2e7f9b13",
+      "payload": {
+        "message_id": "9c1e5a20-4b7d-4f61-2d5a7c0f1846",
+        "text": "hi"
+      }
+    }
+  }
+}

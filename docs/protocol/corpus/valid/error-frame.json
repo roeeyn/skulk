@@ -1,0 +1,23 @@
+{
+  "name": "error-frame",
+  "description": "An error frame answering a join.begin: generic message, no detail about which field was wrong.",
+  "frame_type": "error",
+  "direction": "r2c",
+  "receiver": "client",
+  "expect": {
+    "result": "accept"
+  },
+  "wire": {
+    "kind": "text",
+    "json": {
+      "v": 0,
+      "type": "error",
+      "request_id": "b57c1d84-0e6a-4f3b-9c2d-71ae83f04d6b",
+      "payload": {
+        "code": "authentication_failed",
+        "message": "authentication failed"
+      }
+    }
+  },
+  "notes": "The message field carries no machine meaning and must never contain secrets, lengths, or stack traces (§8, spec §17/§18)."
+}

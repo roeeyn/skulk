@@ -1,0 +1,31 @@
+{
+  "name": "create-ok",
+  "description": "create.ok echoing the request_id, carrying the creator's session identity and a single-entry roster.",
+  "frame_type": "create.ok",
+  "direction": "r2c",
+  "receiver": "client",
+  "expect": {
+    "result": "accept"
+  },
+  "wire": {
+    "kind": "text",
+    "json": {
+      "v": 0,
+      "type": "create.ok",
+      "request_id": "3f2a7c1e-9b4d-4e28-8a51-6c0d2e7f9b13",
+      "payload": {
+        "room_id": "amber-river-copper-moon-forest-glass-harbor-star",
+        "sender_id": "u3Bk9QzR2mXvLp7TnAeYwQ",
+        "username": "quiet-otter-42",
+        "expires_at": "2026-08-25T14:03:11.000Z",
+        "participants": [
+          {
+            "sender_id": "u3Bk9QzR2mXvLp7TnAeYwQ",
+            "username": "quiet-otter-42"
+          }
+        ]
+      }
+    }
+  },
+  "notes": "No history/snapshot_sequence on create.ok — decision D8."
+}

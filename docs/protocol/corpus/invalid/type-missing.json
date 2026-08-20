@@ -1,0 +1,21 @@
+{
+  "name": "type-missing",
+  "description": "No type field.",
+  "frame_type": null,
+  "direction": "c2r",
+  "receiver": "relay",
+  "expect": {
+    "result": "reject",
+    "error_code": "invalid_message",
+    "rule": "V7",
+    "close": true
+  },
+  "wire": {
+    "kind": "text",
+    "json": {
+      "v": 0,
+      "request_id": "7d1c0b93-6a4e-4c17-af52-3b9e8d0142c6",
+      "payload": {}
+    }
+  }
+}

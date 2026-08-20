@@ -1,0 +1,18 @@
+{
+  "name": "binary-frame",
+  "description": "A WebSocket BINARY frame whose bytes are a perfectly valid ping. The frame KIND alone is disqualifying (spec §16.1).",
+  "frame_type": null,
+  "direction": "c2r",
+  "receiver": "relay",
+  "expect": {
+    "result": "reject",
+    "error_code": "unsupported_frame_type",
+    "rule": "V1",
+    "close": true
+  },
+  "wire": {
+    "kind": "binary",
+    "base64": "eyJ2IjowLCJ0eXBlIjoicGluZyIsInJlcXVlc3RfaWQiOiI3ZDFjMGI5My02YTRlLTRjMTctYWY1Mi0zYjllOGQwMTQyYzYiLCJwYXlsb2FkIjp7fX0="
+  },
+  "notes": "Decoding these bytes as text would produce an accepted frame. V1 runs before everything else so it never gets that far."
+}

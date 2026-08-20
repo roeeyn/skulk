@@ -1,0 +1,22 @@
+{
+  "name": "chat-send-unicode",
+  "description": "Multi-byte UTF-8 text: emoji (4 bytes), CJK (3 bytes each), Arabic RTL (2 bytes each), and a combining acute accent. 22 code points, 35 UTF-8 bytes.",
+  "frame_type": "chat.send",
+  "direction": "c2r",
+  "receiver": "relay",
+  "expect": {
+    "result": "accept"
+  },
+  "wire": {
+    "kind": "text",
+    "json": {
+      "v": 0,
+      "type": "chat.send",
+      "payload": {
+        "message_id": "9c1e5a20-4b7d-4f61-b8e3-2d5a7c0f1846",
+        "text": "🦊 skulk 潜行 مرحبا café"
+      }
+    }
+  },
+  "notes": "The 4096 bound counts UTF-8 BYTES, not characters, code points, or UTF-16 units. An implementation that measures runes accepts frames it must reject — see invalid/text-oversized-multibyte.json. The combining mark also means byte length is not a function of rendered width; neither codec may normalize."
+}
