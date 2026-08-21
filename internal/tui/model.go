@@ -77,6 +77,11 @@ type entry struct {
 	indent string // a notice's literal prefix, if any
 	body   string
 	notice bool
+
+	dashed   bool // a system line, drawn as "— text —" at render
+	presence bool // a join/leave line, which the next one may fold into
+	rule     bool // a full-width divider with the body as its label
+	replayed bool // said before this client arrived (A12, from snapshot_sequence)
 }
 
 // senderColumn is the width the username is padded to, so message bodies line up.
@@ -102,8 +107,16 @@ func (e entry) render() string {
 		return e.indent
 	}
 	name, pad := fitSender(e.sender)
+	style := senderStyle(e.sender, e.self)
+	if e.replayed {
+		// Still coloured, so you can tell who said it; dimmed, so the block reads
+		// as background. A12's second clause asks for a visual distinction, and the
+		// reason is not decoration: a replayed name was captured at store time (A8)
+		// and may belong to someone who has since left.
+		style = style.Faint(true)
+	}
 	return clockStyle.Render(e.clock()) + "  " +
-		senderStyle(e.sender, e.self).Render(name) + strings.Repeat(" ", pad) + " "
+		style.Render(name) + strings.Repeat(" ", pad) + " "
 }
 
 // clock is the message's local wall time. Always five columns, whatever the zone,
@@ -173,6 +186,9 @@ type Model struct {
 	roomID   string
 	username string
 	senderID string
+	// snapshotSequence is the last sequence the relay had stored when this client
+	// was admitted. Everything at or below it was said before we arrived.
+	snapshotSequence int
 
 	quitting  bool // a first Ctrl+C has been seen
 	following bool // the transcript is pinned to the live edge
@@ -372,6 +388,7 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 		m.username = msg.info.Username
 		m.senderID = msg.info.SenderID
 		m.online = len(msg.info.Participants)
+		m.snapshotSequence = msg.info.SnapshotSequence
 		m.phase = phaseChat
 		m.unmaskInput()
 
@@ -392,7 +409,15 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 			for _, message := range msg.info.History {
 				m.appendMessage(message)
 			}
-		} else {
+			// The divider goes AFTER the replayed block, because that is where the
+			// boundary is. The count above says how much is coming; this says where
+			// it stops and the live room begins.
+			m.divider("you joined here")
+		} else if m.cfg.Joining {
+			// Only worth saying to someone who joined a room that might have had
+			// history. A room you created a second ago cannot have any, and saying
+			// "Loaded 0" about it is noise in the one transcript that has nothing
+			// else in it.
 			m.note("Loaded 0 retained messages.")
 		}
 		m.note("Type /help for commands.")
@@ -403,6 +428,9 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 		// command existed.
 		if !m.cfg.Joining {
 			m.invite()
+			// §6.1's own wording. The room id travels however you like; the password
+			// is the half that needs care, and this is the moment to say so.
+			m.note("Share the room id and password through a trusted channel.")
 		}
 		return m, waitForEvent(m.events)
 
@@ -654,9 +682,9 @@ func (m Model) handleEvent(event relay.Event) (Model, tea.Cmd) {
 
 	case relay.EventPresence:
 		if event.Presence.Action == "joined" {
-			m.note(fmt.Sprintf("%s joined.", event.Presence.Username))
+			m.presenceNote(fmt.Sprintf("%s joined.", event.Presence.Username))
 		} else {
-			m.note(fmt.Sprintf("%s left.", event.Presence.Username))
+			m.presenceNote(fmt.Sprintf("%s left.", event.Presence.Username))
 		}
 		m.online = event.Presence.ParticipantCount
 
@@ -1059,7 +1087,26 @@ func (m *Model) syncViewport() {
 }
 
 func (m *Model) note(text string) {
-	m.entries = append(m.entries, entry{body: "— " + text + " —", notice: true})
+	m.entries = append(m.entries, entry{body: text, notice: true, dashed: true})
+}
+
+// presenceNote folds into the previous line when that was also presence.
+//
+// Join and leave notices matter and their prominence does not: three people
+// reconnecting should not push a conversation off the screen. Only CONSECUTIVE
+// ones fold, so a notice that actually interrupts a conversation still reads as
+// an interruption.
+func (m *Model) presenceNote(text string) {
+	if n := len(m.entries); n > 0 && m.entries[n-1].presence {
+		m.entries[n-1].body += " " + text
+		return
+	}
+	m.entries = append(m.entries, entry{body: text, notice: true, dashed: true, presence: true})
+}
+
+// divider is a full-width rule with a label in it.
+func (m *Model) divider(label string) {
+	m.entries = append(m.entries, entry{body: label, notice: true, rule: true})
 }
 
 // plain is an indented system line without note's dashes, for a value the user is
@@ -1094,6 +1141,10 @@ func (m *Model) appendMessage(message relay.Message) {
 	m.entries = append(m.entries, entry{
 		at:     receivedAt(message.ReceivedAt),
 		sender: message.SenderUsername,
+		// Derived from snapshot_sequence rather than guessed from a timestamp, and
+		// compared per message rather than flagged during the history loop — a
+		// frame delivered live can still carry a sequence below the snapshot.
+		replayed: m.snapshotSequence > 0 && message.Sequence <= m.snapshotSequence,
 		// By sender id, not username: usernames are connection-scoped and A12 only
 		// keeps retained history from reusing one. This is headless decision H6's
 		// derivation, and sessionReadyMsg sets senderID before replaying history,
@@ -1112,7 +1163,30 @@ func (m Model) rows() []string {
 	width := m.width
 
 	var out []string
+	day := ""
+
 	for _, e := range m.entries {
+		// A room lives 120 hours, so a transcript can span days and "14:02" alone
+		// is ambiguous across them. The boundary is a LOCAL day, which is why the
+		// instant is stored rather than a formatted clock.
+		if !e.at.IsZero() {
+			if on := e.at.Local().Format("Monday, 2 January"); on != day {
+				out = append(out, style(rule(on, width), true))
+				day = on
+			}
+		}
+
+		if e.rule {
+			out = append(out, style(rule(e.body, width), true))
+			continue
+		}
+
+		body := e.body
+		if e.dashed {
+			body = "— " + body + " —"
+		}
+		e.body = body
+
 		prefix := e.prefix()
 		indent := lipgloss.Width(prefix)
 
@@ -1120,18 +1194,19 @@ func (m Model) rows() []string {
 		// rather than producing a one-word-per-row column. The prefix is wrapped
 		// along with the body here, so it goes out unstyled — at this width the
 		// sender colour is the first thing worth losing.
+		dim := e.notice || e.replayed
 		if width-indent < 24 {
 			for _, line := range wrap(prefix+e.body, width) {
-				out = append(out, style(line, e.notice))
+				out = append(out, style(line, dim))
 			}
 			continue
 		}
 
 		for i, line := range wrap(e.body, width-indent) {
 			if i == 0 {
-				out = append(out, e.render()+style(line, e.notice))
+				out = append(out, e.render()+style(line, dim))
 			} else {
-				out = append(out, strings.Repeat(" ", indent)+style(line, e.notice))
+				out = append(out, strings.Repeat(" ", indent)+style(line, dim))
 			}
 		}
 	}
@@ -1146,6 +1221,24 @@ func wrap(text string, limit int) []string {
 		return []string{text}
 	}
 	return strings.Split(ansi.WrapWc(text, limit, " "), "\n")
+}
+
+// rule draws a divider across the width with a label set into it.
+func rule(label string, width int) string {
+	if width < 1 {
+		return ""
+	}
+	if label == "" {
+		return strings.Repeat("─", width)
+	}
+
+	label = " " + label + " "
+	fill := width - lipgloss.Width(label)
+	if fill < 2 {
+		return ansi.Truncate(label, width, "")
+	}
+	left := fill / 2
+	return strings.Repeat("─", left) + label + strings.Repeat("─", fill-left)
 }
 
 func style(line string, notice bool) string {

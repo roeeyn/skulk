@@ -116,11 +116,12 @@ func (f *fakeSession) Close() error {
 
 func info() *relay.Info {
 	return &relay.Info{
-		RoomID:       "amber-river-copper-moon-forest-glass-harbor-star",
-		SenderID:     "u3Bk9QzR2mXvLp7TnAeYwQ",
-		Username:     "quiet-otter-42",
-		ExpiresAt:    "2026-08-25T14:03:11.000Z",
-		Participants: []relay.Participant{{SenderID: "u3Bk9QzR2mXvLp7TnAeYwQ", Username: "quiet-otter-42"}},
+		SnapshotSequence: 0,
+		RoomID:           "amber-river-copper-moon-forest-glass-harbor-star",
+		SenderID:         "u3Bk9QzR2mXvLp7TnAeYwQ",
+		Username:         "quiet-otter-42",
+		ExpiresAt:        "2026-08-25T14:03:11.000Z",
+		Participants:     []relay.Participant{{SenderID: "u3Bk9QzR2mXvLp7TnAeYwQ", Username: "quiet-otter-42"}},
 	}
 }
 
@@ -1243,6 +1244,22 @@ func transcript(t *testing.T, m tea.Model) []string {
 	return lines[2 : len(lines)-3]
 }
 
+// transcriptRows is the transcript window with its blank padding removed.
+//
+// transcript() is a fixed-height window — the viewport always renders exactly its
+// own height — so counting ITS rows measures the terminal, not the content.
+func transcriptRows(t *testing.T, m tea.Model) []string {
+	t.Helper()
+
+	var used []string
+	for _, line := range transcript(t, m) {
+		if strings.TrimSpace(line) != "" {
+			used = append(used, line)
+		}
+	}
+	return used
+}
+
 // inputRow is the middle row of the bordered input box — the one with the prompt
 // in it. The box is the last three rows of the frame.
 func inputRow(t *testing.T, m tea.Model) string {
@@ -1816,5 +1833,151 @@ func TestAnEmptySegmentCostsNoSeparator(t *testing.T) {
 	bar := strings.TrimRight(rendered(t, m)[0], " ")
 	if strings.HasSuffix(bar, "·") || strings.Contains(bar, "·  ·") {
 		t.Errorf("an omitted segment left its separator behind: %q", bar)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ROJ-48 proper: making a transcript readable rather than merely correct.
+// ---------------------------------------------------------------------------
+
+// A12's second clause is a client requirement that was never implemented:
+// "the client SHOULD visually distinguish replayed history from live messages".
+//
+// It is not decoration. A replayed sender_username is captured at store time
+// (A8) and can belong to someone who has since left — or, until ROJ-43, to
+// someone currently present under that name.
+func TestReplayedHistoryIsMarkedOffFromLiveMessages(t *testing.T) {
+	session := newFakeSession(info())
+	session.info.SnapshotSequence = 2
+	session.info.History = []relay.Message{
+		{MessageID: "a", SenderUsername: "bright-fox-17", Sequence: 1, ReceivedAt: "2026-08-20T14:02:10.000Z", Text: "said-before-you-arrived"},
+		{MessageID: "b", SenderUsername: "swift-hare-05", Sequence: 2, ReceivedAt: "2026-08-20T14:02:44.000Z", Text: "also-before"},
+	}
+
+	m, pumpCmd := connected(t, session, true)
+	m, _ = step(m, tea.WindowSizeMsg{Width: 80, Height: 30})
+
+	if view := m.View(); !strings.Contains(view, "you joined here") {
+		t.Errorf("expected a boundary between history and live:\n%s", view)
+	}
+
+	// The boundary sits AFTER the replayed block, not before it.
+	lines := transcript(t, m)
+	boundary, last := -1, -1
+	for i, line := range lines {
+		if strings.Contains(line, "you joined here") {
+			boundary = i
+		}
+		if strings.Contains(line, "also-before") {
+			last = i
+		}
+	}
+	if boundary < 0 || last < 0 || boundary < last {
+		t.Errorf("boundary at %d, last replayed message at %d — the divider must follow the block:\n%s",
+			boundary, last, strings.Join(lines, "\n"))
+	}
+
+	// A live message lands below it.
+	m, _ = pump(t, m, pumpCmd, session, relay.Event{Kind: relay.EventMessage, Message: relay.Message{
+		SenderUsername: "bright-fox-17", Sequence: 3,
+		ReceivedAt: "2026-08-20T14:09:00.000Z", Text: "said-just-now",
+	}})
+	if view := m.View(); !strings.Contains(view, "said-just-now") {
+		t.Errorf("a live message should follow the boundary:\n%s", view)
+	}
+}
+
+// A room lives 120 hours, so "14:02" alone is ambiguous across days. The
+// separator marks a LOCAL day, which is why the instant is what gets stored.
+func TestADateSeparatorMarksTheLocalDayBoundary(t *testing.T) {
+	saved := time.Local
+	time.Local = time.FixedZone("CST", -6*60*60)
+	t.Cleanup(func() { time.Local = saved })
+
+	session := newFakeSession(info())
+	m, pumpCmd := connected(t, session, false)
+	m, _ = step(m, tea.WindowSizeMsg{Width: 80, Height: 30})
+
+	// 02:00Z on the 21st is 20:00 on the 20th locally — the same local day as the
+	// message before it, so no separator belongs between them.
+	for i, wire := range []string{"2026-08-20T18:00:00.000Z", "2026-08-21T02:00:00.000Z"} {
+		m, pumpCmd = pump(t, m, pumpCmd, session, relay.Event{Kind: relay.EventMessage, Message: relay.Message{
+			SenderUsername: "bright-fox-17", Sequence: i + 1, ReceivedAt: wire, Text: "same-local-day",
+		}})
+	}
+	if got := strings.Count(m.View(), "Thursday, 20 August"); got != 1 {
+		t.Errorf("expected exactly one separator for the local day, got %d:\n%s", got, m.View())
+	}
+	if strings.Contains(m.View(), "21 August") {
+		t.Errorf("02:00Z is still 20 August locally; no separator belongs there:\n%s", m.View())
+	}
+
+	// Crossing the local midnight does earn one.
+	m, _ = pump(t, m, pumpCmd, session, relay.Event{Kind: relay.EventMessage, Message: relay.Message{
+		SenderUsername: "bright-fox-17", Sequence: 3, ReceivedAt: "2026-08-21T07:00:00.000Z", Text: "next-local-day",
+	}})
+	if !strings.Contains(m.View(), "Friday, 21 August") {
+		t.Errorf("crossing local midnight should add a separator:\n%s", m.View())
+	}
+}
+
+// The information matters; the prominence does not. Three people reconnecting
+// should not push a conversation off the screen.
+func TestConsecutivePresenceNoticesFold(t *testing.T) {
+	session := newFakeSession(info())
+	m, pumpCmd := connected(t, session, false)
+	m, _ = step(m, tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	before := len(transcriptRows(t, m))
+	for _, name := range []string{"bright-fox-17", "swift-hare-05", "noble-kestrel-08"} {
+		m, pumpCmd = pump(t, m, pumpCmd, session, relay.Event{
+			Kind: relay.EventPresence, Presence: relay.Presence{Action: "joined", Username: name, ParticipantCount: 2},
+		})
+	}
+
+	// One line for three arrivals, and all three still named.
+	if grew := len(transcriptRows(t, m)) - before; grew != 1 {
+		t.Errorf("three consecutive arrivals took %d rows, want 1", grew)
+	}
+	for _, name := range []string{"bright-fox-17", "swift-hare-05", "noble-kestrel-08"} {
+		if !strings.Contains(m.View(), name) {
+			t.Errorf("folding lost %s:\n%s", name, m.View())
+		}
+	}
+
+	// A message between them breaks the run: an interruption should still read as
+	// one. (TestRelayEventsRender covers the same property from the other side.)
+	m, pumpCmd = pump(t, m, pumpCmd, session, relay.Event{Kind: relay.EventMessage, Message: relay.Message{
+		SenderUsername: "bright-fox-17", Sequence: 1, ReceivedAt: "2026-08-20T14:07:52.418Z", Text: "hello",
+	}})
+	middle := len(transcriptRows(t, m))
+	m, _ = pump(t, m, pumpCmd, session, relay.Event{
+		Kind: relay.EventPresence, Presence: relay.Presence{Action: "left", Username: "swift-hare-05", ParticipantCount: 1},
+	})
+	if grew := len(transcriptRows(t, m)) - middle; grew != 1 {
+		t.Errorf("a presence notice after a message took %d rows, want its own", grew)
+	}
+}
+
+// A freshly created room has nothing in it. It should say what to do next, and
+// not report the absence of history a new room could not possibly have.
+func TestANewRoomSaysWhatToDoNext(t *testing.T) {
+	session := newFakeSession(info())
+	m, _ := connected(t, session, false)
+
+	view := m.View()
+	if strings.Contains(view, "Loaded 0 retained messages") {
+		t.Errorf("a room created a second ago cannot have history; saying so is noise:\n%s", view)
+	}
+	// §6.1's own wording.
+	if !strings.Contains(view, "trusted channel") {
+		t.Errorf("a new room should say how to share it:\n%s", view)
+	}
+
+	// Someone who JOINED a room might reasonably wonder, so they still get told.
+	other := newFakeSession(info())
+	joined, _ := connected(t, other, true)
+	if !strings.Contains(joined.View(), "Loaded 0 retained messages") {
+		t.Errorf("joining an empty room should still report it:\n%s", joined.View())
 	}
 }

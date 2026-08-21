@@ -121,12 +121,21 @@ func TestColouredNamesStillAlign(t *testing.T) {
 
 	column := -1
 	for i, row := range m.rows() {
+		// Date separators and other rules have no body to align; skip them rather
+		// than letting the first one become the baseline.
+		if !strings.Contains(row, "body") {
+			continue
+		}
+
 		at := lipgloss.Width(ansiPrefixBefore(row, "body"))
 		if column == -1 {
 			column = at
 		} else if at != column {
 			t.Errorf("row %d starts its body at column %d, want %d: %q", i, at, column, row)
 		}
+	}
+	if column == -1 {
+		t.Fatal("no message rows found — the fixture is not testing anything")
 	}
 }
 
@@ -136,4 +145,45 @@ func ansiPrefixBefore(row, marker string) string {
 		return row[:i]
 	}
 	return row
+}
+
+// A12's boundary is derived from snapshot_sequence, not guessed from timestamps —
+// so a frame delivered live that carries a sequence at or below the snapshot is
+// still history, and must look like it.
+//
+// This lives here rather than in the external suite because the distinction is
+// Faint, which the ASCII profile strips: asserted over there it would compare two
+// identical strings and pass forever.
+func TestTheReplayBoundaryComesFromSnapshotSequence(t *testing.T) {
+	saved := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI)
+	t.Cleanup(func() { lipgloss.SetColorProfile(saved) })
+
+	m := Model{width: 100, snapshotSequence: 5}
+	m.appendMessage(relay.Message{SenderUsername: "bright-fox-17", Sequence: 4, ReceivedAt: "2026-08-20T14:09:00.000Z", Text: "below"})
+	m.appendMessage(relay.Message{SenderUsername: "bright-fox-17", Sequence: 6, ReceivedAt: "2026-08-20T14:09:10.000Z", Text: "above"})
+
+	rows := m.rows()
+	var replayed, live string
+	for _, row := range rows {
+		switch {
+		case strings.Contains(row, "below"):
+			replayed = row
+		case strings.Contains(row, "above"):
+			live = row
+		}
+	}
+	if replayed == "" || live == "" {
+		t.Fatalf("fixture did not render both messages: %q", rows)
+	}
+	if strings.ReplaceAll(replayed, "below", "") == strings.ReplaceAll(live, "above", "") {
+		t.Error("a message at or below the snapshot must not render like a live one")
+	}
+
+	// And with no snapshot at all, nothing is history.
+	none := Model{width: 100}
+	none.appendMessage(relay.Message{SenderUsername: "bright-fox-17", Sequence: 4, ReceivedAt: "2026-08-20T14:09:00.000Z", Text: "below"})
+	if strings.Contains(none.rows()[len(none.rows())-1], "\x1b[2m\x1b[3") {
+		t.Error("with no snapshot sequence, no message should be marked as replayed")
+	}
 }
