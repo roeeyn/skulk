@@ -23,8 +23,21 @@ defmodule Skulkd.Router do
 
   get "/v1/ws" do
     conn
-    |> WebSockAdapter.upgrade(Skulkd.Conn, [], timeout: :timer.minutes(10))
+    |> WebSockAdapter.upgrade(Skulkd.Conn, [], timeout: idle_timeout())
     |> halt()
+  end
+
+  # Bandit's WebSocket IDLE timeout: how long a connection may go without the client
+  # sending anything before Bandit closes it — with code 1002, which reads like a
+  # protocol error but means "you went quiet" (bandit/websocket/connection.ex,
+  # handle_timeout/2).
+  #
+  # Ten minutes of not typing is ordinary, so the client answers this with protocol
+  # v0 §5.10 pings rather than the bound being made enormous. This stays as the
+  # backstop it is meant to be: a peer that has genuinely gone away is hung up on.
+  # Configurable so tests can pin the behaviour without waiting ten minutes.
+  defp idle_timeout do
+    Application.get_env(:skulkd, :websocket_idle_timeout, :timer.minutes(10))
   end
 
   match _ do
