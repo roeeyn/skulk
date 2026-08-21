@@ -19,8 +19,8 @@ you have found something to add to its §10 Decisions.
 
 ```
 registry.json     frame types + directions, error codes, limits — the coverage source of truth
-valid/*.json      frames both implementations MUST accept   (20 vectors)
-invalid/*.json    frames both implementations MUST reject   (39 vectors)
+valid/*.json      frames both implementations MUST accept   (21 vectors)
+invalid/*.json    frames both implementations MUST reject   (38 vectors)
 ```
 
 ## Vector file format
@@ -52,7 +52,7 @@ Invalid vectors:
 { "result": "reject", "error_code": "message_too_large", "rule": "V13", "close": false }
 ```
 
-- `error_code` — one of `registry.json`'s ten codes. **Assert exact equality.** "It rejected
+- `error_code` — one of `registry.json`'s eleven codes. **Assert exact equality.** "It rejected
   it somehow" is not the contract; identical codes across languages is the contract.
 - `rule` — the `docs/protocol-v0.md` §7 rule that must fire. Several vectors exist *only* to
   pin rule ordering (`v-unsupported-with-unknown-type` is the clearest: it breaks two rules
@@ -196,8 +196,11 @@ asserts the same codes. Two vectors behave differently there, both correctly:
 - **A vector is never edited to match an implementation.** If a vector is wrong, fix it
   against the document and note why in the commit; if the document is wrong, amend it and its
   §10 Decisions in the same commit.
-- Vectors that expire have a note saying so. `invalid/error-code-server-capacity.json` is the
-  example: `server_capacity` becomes reachable at M1, at which point that vector is deleted
-  and the code is added to `registry.json` in the same commit.
+- Vectors that expire have a note saying so, and one already has. `server_capacity` was
+  absent from the v0 registry because nothing could raise it, and
+  `invalid/error-code-server-capacity.json` asserted that absence; ROJ-39 deleted it and
+  added the code to `registry.json` in the same commit, exactly as its notes instructed.
+  `valid/error-frame-server-capacity.json` replaces it. The vector total is unchanged at 59
+  because one moved from `invalid/` to `valid/`.
 - At M1 this corpus seeds the property/fuzz suite (spec §22.3). Any mutation the fuzzer finds
   that the two implementations disagree on gets frozen here as a new vector.

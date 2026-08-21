@@ -347,7 +347,7 @@ Mapped from spec §17.
 | `3` | network/transport failure — `transport`, `disconnected` |
 | `4` | `room_not_found`, `room_expired` (including the `room_expired` event) |
 | `5` | `authentication_failed` |
-| `6` | `room_full`, `server_capacity` (the latter is unreachable until M1 adds capacity accounting — see protocol v0 §6) |
+| `6` | `room_full`, `server_capacity` |
 | `7` | `unsupported_protocol_version` |
 
 ---

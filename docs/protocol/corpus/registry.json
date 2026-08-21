@@ -4,19 +4,87 @@
   "corpus_version": 1,
   "spec": "docs/protocol-v0.md",
   "frame_types": [
-    { "type": "create.begin",    "directions": ["c2r"] },
-    { "type": "create.ok",       "directions": ["r2c"] },
-    { "type": "join.begin",      "directions": ["c2r"] },
-    { "type": "join.ok",         "directions": ["r2c"] },
-    { "type": "chat.send",       "directions": ["c2r"] },
-    { "type": "chat.message",    "directions": ["r2c"] },
-    { "type": "presence.joined", "directions": ["r2c"] },
-    { "type": "presence.left",   "directions": ["r2c"] },
-    { "type": "presence.list",   "directions": ["c2r", "r2c"] },
-    { "type": "room.expired",    "directions": ["r2c"] },
-    { "type": "ping",            "directions": ["c2r", "r2c"] },
-    { "type": "pong",            "directions": ["c2r", "r2c"] },
-    { "type": "error",           "directions": ["r2c"] }
+    {
+      "type": "create.begin",
+      "directions": [
+        "c2r"
+      ]
+    },
+    {
+      "type": "create.ok",
+      "directions": [
+        "r2c"
+      ]
+    },
+    {
+      "type": "join.begin",
+      "directions": [
+        "c2r"
+      ]
+    },
+    {
+      "type": "join.ok",
+      "directions": [
+        "r2c"
+      ]
+    },
+    {
+      "type": "chat.send",
+      "directions": [
+        "c2r"
+      ]
+    },
+    {
+      "type": "chat.message",
+      "directions": [
+        "r2c"
+      ]
+    },
+    {
+      "type": "presence.joined",
+      "directions": [
+        "r2c"
+      ]
+    },
+    {
+      "type": "presence.left",
+      "directions": [
+        "r2c"
+      ]
+    },
+    {
+      "type": "presence.list",
+      "directions": [
+        "c2r",
+        "r2c"
+      ]
+    },
+    {
+      "type": "room.expired",
+      "directions": [
+        "r2c"
+      ]
+    },
+    {
+      "type": "ping",
+      "directions": [
+        "c2r",
+        "r2c"
+      ]
+    },
+    {
+      "type": "pong",
+      "directions": [
+        "c2r",
+        "r2c"
+      ]
+    },
+    {
+      "type": "error",
+      "directions": [
+        "r2c"
+      ]
+    }
   ],
   "error_codes": [
     "room_not_found",
@@ -24,6 +92,7 @@
     "authentication_failed",
     "room_expired",
     "room_full",
+    "server_capacity",
     "message_too_large",
     "invalid_message",
     "unsupported_protocol_version",
@@ -31,7 +100,19 @@
     "internal_error"
   ],
   "validation_rules": [
-    "V1", "V2", "V3", "V4", "V5", "V6", "V7", "V8", "V9", "V10", "V11", "V12", "V13"
+    "V1",
+    "V2",
+    "V3",
+    "V4",
+    "V5",
+    "V6",
+    "V7",
+    "V8",
+    "V9",
+    "V10",
+    "V11",
+    "V12",
+    "V13"
   ],
   "limits": {
     "max_relay_frame_bytes": 16384,

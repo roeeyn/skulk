@@ -47,14 +47,15 @@ const (
 	KindBinary Kind = "binary"
 )
 
-// Error codes, docs/protocol-v0.md §6. Exactly ten: server_capacity is defined by
-// spec §17 but unreachable until M1 adds capacity accounting.
+// Error codes, docs/protocol-v0.md §6. Exactly eleven since M1 (ROJ-39) made
+// server_capacity reachable; §17 groups it with room_full on exit code 6.
 const (
 	CodeRoomNotFound               = "room_not_found"
 	CodeRoomAlreadyExists          = "room_already_exists"
 	CodeAuthenticationFailed       = "authentication_failed"
 	CodeRoomExpired                = "room_expired"
 	CodeRoomFull                   = "room_full"
+	CodeServerCapacity             = "server_capacity"
 	CodeMessageTooLarge            = "message_too_large"
 	CodeInvalidMessage             = "invalid_message"
 	CodeUnsupportedProtocolVersion = "unsupported_protocol_version"
@@ -64,8 +65,9 @@ const (
 
 var errorCodes = map[string]bool{
 	CodeRoomNotFound: true, CodeRoomAlreadyExists: true, CodeAuthenticationFailed: true,
-	CodeRoomExpired: true, CodeRoomFull: true, CodeMessageTooLarge: true,
-	CodeInvalidMessage: true, CodeUnsupportedProtocolVersion: true,
+	CodeRoomExpired: true, CodeRoomFull: true, CodeServerCapacity: true,
+	CodeMessageTooLarge: true,
+	CodeInvalidMessage:  true, CodeUnsupportedProtocolVersion: true,
 	CodeUnsupportedFrameType: true, CodeInternalError: true,
 }
 

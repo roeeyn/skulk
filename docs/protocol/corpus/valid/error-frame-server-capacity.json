@@ -1,0 +1,23 @@
+{
+  "name": "error-frame-server-capacity",
+  "description": "An error frame carrying server_capacity, the code M1 makes reachable.",
+  "frame_type": "error",
+  "direction": "r2c",
+  "receiver": "client",
+  "expect": {
+    "result": "accept"
+  },
+  "wire": {
+    "kind": "text",
+    "json": {
+      "v": 0,
+      "type": "error",
+      "request_id": "9d4e2b71-6c58-4a03-b7e9-1f5d8a2c60b4",
+      "payload": {
+        "code": "server_capacity",
+        "message": "at capacity"
+      }
+    }
+  },
+  "notes": "Replaces invalid/error-code-server-capacity.json, which existed to assert this code was NOT in the v0 registry. ROJ-39 deleted that vector and added the code in the same commit, exactly as its own notes instructed. The message says nothing about which limit was hit — §8 and spec §17/§18 keep capacity numbers out of a frame anyone can provoke."
+}

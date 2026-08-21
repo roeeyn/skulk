@@ -146,7 +146,7 @@ defmodule Skulkd.ProtocolContractTest do
     # ROJ-29 acceptance criteria, checked mechanically so they cannot rot.
     test "acceptance criteria" do
       assert length(@invalid) >= 10, "ticket requires at least 10 invalid vectors"
-      assert length(@registry["error_codes"]) == 10, "protocol v0 defines exactly 10 error codes"
+      assert length(@registry["error_codes"]) == 11, "protocol v0 defines exactly 11 error codes"
       assert length(@registry["frame_types"]) == 13, "protocol v0 defines exactly 13 frame types"
     end
   end

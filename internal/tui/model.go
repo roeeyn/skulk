@@ -1279,7 +1279,7 @@ func outcomeFor(err error) Outcome {
 		return OutcomeAuthFailed
 	case protocol.CodeRoomNotFound, protocol.CodeRoomExpired:
 		return OutcomeNoRoom
-	case protocol.CodeRoomFull:
+	case protocol.CodeRoomFull, protocol.CodeServerCapacity:
 		return OutcomeCapacity
 	case protocol.CodeUnsupportedProtocolVersion:
 		return OutcomeProtocol

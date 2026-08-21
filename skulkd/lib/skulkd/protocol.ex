@@ -37,12 +37,11 @@ defmodule Skulkd.Protocol do
   @uuid4 ~r/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
   @timestamp ~r/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
 
-  # §6. Exactly ten. `server_capacity` is defined by spec §17 but unreachable until
-  # M1 adds capacity accounting, so it is not a valid v0 code — see the corpus
-  # vector invalid/error-code-server-capacity.json.
+  # §6. Exactly eleven since M1 (ROJ-39) made `server_capacity` reachable. §17
+  # groups it with `room_full` on exit code 6.
   @error_codes ~w(
     room_not_found room_already_exists authentication_failed room_expired room_full
-    message_too_large invalid_message unsupported_protocol_version
+    server_capacity message_too_large invalid_message unsupported_protocol_version
     unsupported_frame_type internal_error
   )
 

@@ -486,6 +486,11 @@ func TestFailedJoinMapsToTheSpecExitCode(t *testing.T) {
 	}{
 		{"wrong password", &relay.Error{Code: protocol.CodeAuthenticationFailed, Message: "authentication failed"}, 5},
 		{"unknown room", &relay.Error{Code: protocol.CodeRoomNotFound, Message: "room not found"}, 4},
+		{"room full", &relay.Error{Code: protocol.CodeRoomFull, Message: "room is full"}, 6},
+		// §17 groups server_capacity with room_full on 6. ROJ-39's ticket said this
+		// was "already handled by outcomeFor, verify" — it was not, and neither was
+		// the headless twin. Verifying beat trusting.
+		{"server at capacity", &relay.Error{Code: protocol.CodeServerCapacity, Message: "at capacity"}, 6},
 		{"transport", errors.New("connection refused"), 3},
 	}
 

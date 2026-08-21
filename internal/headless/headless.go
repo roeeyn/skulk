@@ -463,7 +463,7 @@ func exitFor(code string) int {
 		return ExitNoRoom
 	case protocol.CodeAuthenticationFailed:
 		return ExitAuth
-	case protocol.CodeRoomFull:
+	case protocol.CodeRoomFull, protocol.CodeServerCapacity:
 		return ExitCapacity
 	case protocol.CodeUnsupportedProtocolVersion:
 		return ExitProtocol
