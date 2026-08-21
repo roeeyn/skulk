@@ -23,11 +23,24 @@ defmodule Skulkd.Integration.ProtocolDifferentialTest do
     resolved during parsing, where Go substituted U+FFFD and accepted while Jason
     rejected. V3 had already decided it; the Go codec was out of spec.
 
-  ## Runs
+  ## What was searched, so that "nothing further" means something
 
-  `PROPERTY_RUNS` raises the case count for a campaign:
+  The suite runs 300 cases per property by default, and `PROPERTY_RUNS` raises it:
 
-      PROPERTY_RUNS=25000 mix test.integration --only differential
+      PROPERTY_RUNS=30000 mix test.integration --only differential
+
+  The campaign behind this file's findings was `PROPERTY_RUNS=30000` — roughly
+  120,000 frames, 213 seconds — over four generators: every corpus vector
+  byte-mutated (flip, truncate, insert, splice, and appended `}`, `\\ud800`, `""`),
+  arbitrary binaries, structurally plausible frames built field by field from the
+  registry, and targeted duplicate-key and surrogate spellings. Both receiver
+  roles, both frame kinds.
+
+  It found nothing beyond the four already fixed. Two things that search does NOT
+  cover, and it would be dishonest to imply otherwise: generated frames rarely
+  exceed a few kilobytes, so the 16 KiB relay bound is exercised by the corpus
+  rather than by fuzzing; and §22.3's canonical AAD encoding does not exist until
+  M3, so that half of the requirement is unaddressed by construction.
   """
   use ExUnit.Case, async: false
   use ExUnitProperties

@@ -15,10 +15,19 @@ defmodule Skulkd.ProtocolPropertyTest do
 
   Bounded so the normal suite stays fast. `PROPERTY_RUNS` raises it for a campaign:
 
-      PROPERTY_RUNS=20000 mix test test/skulkd/protocol_property_test.exs
+      PROPERTY_RUNS=50000 mix test test/skulkd/protocol_property_test.exs
+
+  That campaign — 300,000 cases across these six properties, 328 seconds — is what
+  the current shape of this file survived. It found one thing, and it was a bug in
+  a property rather than in the codec: see the frame-size guard in the D3 property.
   """
   use ExUnit.Case, async: true
   use ExUnitProperties
+
+  # ExUnit's default 60s wall is fine for the bounded run and far too short for a
+  # campaign, and a campaign that reports a timeout as a failure is a campaign
+  # nobody trusts.
+  @moduletag timeout: 1_800_000
 
   alias Skulkd.Frames
   alias Skulkd.Protocol
@@ -163,8 +172,19 @@ defmodule Skulkd.ProtocolPropertyTest do
         end
 
       receiver = Corpus.receiver(vector)
+      encoded = Jason.encode!(decorated)
+
       assert Protocol.validate(receiver, :text, Jason.encode!(original)) == :ok
-      assert Protocol.validate(receiver, :text, Jason.encode!(decorated)) == :ok
+
+      # A long campaign found this the honest way: `chat-send-max-text` already
+      # sits at §4's 4,096-byte text bound, so decorating it can push the whole
+      # FRAME past V2's 16,384-byte cap — and `message_too_large` is then the
+      # correct answer rather than a D3 violation. The rule under test is that an
+      # unknown field is ignored, which is only a claim about frames that are
+      # otherwise legal.
+      if byte_size(encoded) <= 16_384 do
+        assert Protocol.validate(receiver, :text, encoded) == :ok
+      end
     end
   end
 
