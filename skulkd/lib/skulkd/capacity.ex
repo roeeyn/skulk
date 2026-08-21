@@ -66,6 +66,14 @@ defmodule Skulkd.Capacity do
 
   Runs in the calling room's process. On `:ok` the caller now owns those bytes and
   gives them back by dying (the monitor) or by calling `release_all/1`.
+
+  The global total moves before the room's own row does, and a room killed between
+  those two operations leaves the global counter holding bytes no room's row claims
+  — permanently, since nothing recomputes it. The order is that way round on
+  purpose: reversed, the monitor would give back more than the room ever took and
+  the counter would drift *below* the truth, quietly admitting more than the cap.
+  Over-counting by at most one message per abnormally-killed room only ever refuses
+  early, which is the direction a bound should fail in.
   """
   @spec reserve(atom(), pos_integer()) :: :ok | {:error, :server_capacity}
   def reserve(capacity, bytes) when is_integer(bytes) and bytes > 0 do
