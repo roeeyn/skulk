@@ -917,7 +917,7 @@ func TestNewMessagesDoNotYankTheViewWhenScrolledUp(t *testing.T) {
 	m, pumpCmd, session := filled(t, 80, 14, 30)
 
 	m, _ = step(m, tea.KeyMsg{Type: tea.KeyPgUp})
-	before := m.View()
+	before := transcript(t, m)
 
 	m, pumpCmd = pump(t, m, pumpCmd, session, relay.Event{Kind: relay.EventMessage, Message: relay.Message{
 		SenderUsername: "bright-fox-17", Sequence: 31,
@@ -927,8 +927,11 @@ func TestNewMessagesDoNotYankTheViewWhenScrolledUp(t *testing.T) {
 	if view := m.View(); strings.Contains(view, "arrived-while-reading") {
 		t.Errorf("a new message yanked the view back to the bottom:\n%s", view)
 	}
-	if view := m.View(); view != before {
-		t.Errorf("the view moved under the reader:\nbefore:\n%s\nafter:\n%s", before, view)
+	// The TRANSCRIPT must not move. The status bar is allowed to — and since
+	// ROJ-48 it does, because that is where the "N new" indicator lives.
+	if after := transcript(t, m); strings.Join(after, "\n") != strings.Join(before, "\n") {
+		t.Errorf("the transcript moved under the reader:\nbefore:\n%s\nafter:\n%s",
+			strings.Join(before, "\n"), strings.Join(after, "\n"))
 	}
 
 	// And it is still there once the reader chooses to come back. Two presses,
@@ -1227,6 +1230,18 @@ func waitForOutput(t *testing.T, out *lockedBuffer, want string) {
 // displayed once (§9.2), and the room id did not exist until connect() ran, a
 // screen later. There was no moment at which a complete invite existed.
 // ---------------------------------------------------------------------------
+
+// transcript is the frame between the status bar and the input box: row 0 is the
+// bar, row 1 is blank, the last three are the box.
+func transcript(t *testing.T, m tea.Model) []string {
+	t.Helper()
+
+	lines := rendered(t, m)
+	if len(lines) < 6 {
+		t.Fatalf("frame is only %d rows:\n%s", len(lines), m.View())
+	}
+	return lines[2 : len(lines)-3]
+}
 
 // inputRow is the middle row of the bordered input box — the one with the prompt
 // in it. The box is the last three rows of the frame.
@@ -1732,5 +1747,74 @@ func TestRoomCommandWorksWithoutAClipboard(t *testing.T) {
 
 	if !strings.Contains(m.View(), "amber-river-copper-moon-forest-glass-harbor-star") {
 		t.Errorf("/room should still show the id:\n%s", m.View())
+	}
+}
+
+// "Scrolling is working now, but we should have an indicator that there are more
+// messages either top or bottom. This should be discrete."
+func TestTheStatusBarSaysWhetherThereIsMoreToScroll(t *testing.T) {
+	// A transcript that fits says nothing at all — the indicator must not be a
+	// permanent fixture in a quiet room.
+	quiet := newFakeSession(info())
+	m, _ := connected(t, quiet, false)
+	m, _ = step(m, tea.WindowSizeMsg{Width: 80, Height: 40})
+
+	// Structural rather than "contains no arrow": an assertion that names the
+	// characters it does not want cannot see a NEW one. Nothing follows the
+	// participant count when there is nothing to scroll to.
+	if bar := strings.TrimRight(rendered(t, m)[0], " "); !strings.HasSuffix(bar, "online") {
+		t.Errorf("a transcript that fits should end at the participant count: %q", bar)
+	}
+
+	// Full and at the bottom: there is history above, nothing below.
+	m, pumpCmd, session := filled(t, 80, 14, 30)
+	if bar := rendered(t, m)[0]; !strings.Contains(bar, "↑") || strings.Contains(bar, "↓") {
+		t.Errorf("at the live edge the bar should point up only: %q", bar)
+	}
+
+	// Scrolled into the middle: more in both directions.
+	m, _ = step(m, tea.KeyMsg{Type: tea.KeyPgUp})
+	if bar := rendered(t, m)[0]; !strings.Contains(bar, "↑↓") {
+		t.Errorf("mid-transcript the bar should point both ways: %q", bar)
+	}
+
+	// The state that matters: messages arriving while you read back.
+	for i := 31; i <= 33; i++ {
+		m, pumpCmd = pump(t, m, pumpCmd, session, relay.Event{Kind: relay.EventMessage, Message: relay.Message{
+			SenderUsername: "bright-fox-17", Sequence: i,
+			ReceivedAt: "2026-08-20T14:09:00.000Z", Text: "while-you-were-reading",
+		}})
+	}
+	if bar := rendered(t, m)[0]; !strings.Contains(bar, "↓ 3 new") {
+		t.Errorf("the bar should count what arrived while scrolled away: %q", bar)
+	}
+
+	// Coming back clears it.
+	m = typeText(m, "caught up")
+	m, cmd := enter(m)
+	run(cmd)
+
+	if bar := rendered(t, m)[0]; strings.Contains(bar, "new") {
+		t.Errorf("returning to the live edge should clear the count: %q", bar)
+	}
+
+	// And it must be gone rather than merely hidden: scrolling away again with
+	// nothing new must not resurrect a stale count.
+	m, _ = step(m, tea.KeyMsg{Type: tea.KeyPgUp})
+	if bar := rendered(t, m)[0]; strings.Contains(bar, "new") {
+		t.Errorf("a stale count came back on the next scroll: %q", bar)
+	}
+}
+
+// An empty segment must cost nothing — not even its separator, which is five
+// columns of nothing on a terminal that has none to spare.
+func TestAnEmptySegmentCostsNoSeparator(t *testing.T) {
+	session := newFakeSession(info())
+	m, _ := connected(t, session, false)
+	m, _ = step(m, tea.WindowSizeMsg{Width: 80, Height: 40}) // transcript fits: no arrow
+
+	bar := strings.TrimRight(rendered(t, m)[0], " ")
+	if strings.HasSuffix(bar, "·") || strings.Contains(bar, "·  ·") {
+		t.Errorf("an omitted segment left its separator behind: %q", bar)
 	}
 }
