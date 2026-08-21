@@ -121,10 +121,11 @@ type Model struct {
 	err       string
 }
 
-// The chat frame's fixed rows: a status bar, a blank line, the transcript, a
-// blank line, the input. Alt-screen means the app owns exactly the rows it was
-// given, so the transcript takes whatever is left and never one row more.
-const chatChrome = 4
+// The chat frame's fixed rows: a status bar, a blank line, the transcript, and a
+// three-row input box sitting flush beneath it. Alt-screen means the app owns
+// exactly the rows it was given, so the transcript takes whatever is left and
+// never one row more.
+const chatChrome = 5
 
 // Fallback geometry for a model that has not been told the terminal size yet.
 const (
@@ -165,6 +166,17 @@ func New(cfg Config) Model {
 			m.suggested = suggested
 		} else {
 			m.err = fmt.Sprintf("could not generate a passphrase: %v", err)
+		}
+
+		// The room id is generated HERE rather than in connect(), because §9.2
+		// displays a generated password exactly once and an invite is both halves.
+		// Born a screen later, the id arrived seconds too late to be copied with the
+		// password — which is precisely how the first tester lost it. connect()'s
+		// `roomID == ""` guard lets this value through untouched.
+		if roomID, err := cfg.NewRoomID(); err == nil {
+			m.roomID = roomID
+		} else {
+			m.err = fmt.Sprintf("could not generate a room id: %v", err)
 		}
 		m.maskInput()
 	}
@@ -282,6 +294,10 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 		m.phase = phaseChat
 		m.unmaskInput()
 
+		// The relay assigns the username, so this is the first moment there is one
+		// to show. Password prompts keep the bare "> ".
+		m.input.Prompt = m.username + " > "
+
 		// The prompt and the session share one err field, and a rejected password is
 		// stale the moment a connection succeeds. Leaving it set makes it the final
 		// frame in place of the transcript, and Reason() prints it to stderr after a
@@ -299,6 +315,14 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 			m.note("Loaded 0 retained messages.")
 		}
 		m.note("Type /help for commands.")
+
+		// Only on create: someone who joined was already given these. Recall on
+		// demand (/room) and show-at-the-right-moment are different failure modes,
+		// and the tester hit the second one — they lost the id before learning a
+		// command existed.
+		if !m.cfg.Joining {
+			m.invite()
+		}
 		return m, waitForEvent(m.events)
 
 	case sessionFailedMsg:
@@ -465,9 +489,17 @@ func (m Model) submit(value string) (Model, tea.Cmd) {
 	case "/help":
 		m.note("/help — this message")
 		m.note("/who — who is in the room")
+		m.note("/room — the room id and a join command to share")
 		m.note("/quit — leave and exit")
 		m.note("PgUp / PgDn — scroll back; sending a message returns you to the latest")
 		m.note("The relay can read every message. skulk is not end-to-end encrypted yet.")
+		return m, nil
+
+	case "/room":
+		m.invite()
+		// §9.2 displays a generated password once. Saying so is the useful part:
+		// otherwise the absence reads as an oversight rather than a rule.
+		m.note("The password appeared once and is not shown again.")
 		return m, nil
 
 	case "/who":
@@ -603,6 +635,10 @@ func waitForEvent(events <-chan relay.Event) tea.Cmd {
 var (
 	statusStyle = lipgloss.NewStyle().Bold(true)
 	noticeStyle = lipgloss.NewStyle().Faint(true)
+
+	// The composing area as a region rather than a stray line. Box-drawing
+	// characters need no colour, so this renders the same on the ASCII profile.
+	inputBoxStyle = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1)
 )
 
 func (m Model) View() string {
@@ -612,9 +648,13 @@ func (m Model) View() string {
 	case phaseRetype:
 		return m.section("Confirm password:", "Type it again.")
 	case phaseConfirmCopied:
+		// Both halves, together. Either one alone is not an invite, and this is the
+		// only screen the password ever appears on.
 		return m.section(
-			fmt.Sprintf("Your room password is:\n\n    %s\n", m.password),
-			"Copy it somewhere safe — it is shown once. Press Enter to continue.")
+			fmt.Sprintf("Your room is ready. Copy both — the password is shown once.\n\n"+
+				"    Room ID     %s\n    Password    %s\n", m.roomID, m.password),
+			"Anyone with both can join. Send the password through a channel you trust.\n"+
+				"Press Enter to continue.")
 	case phaseJoinPassword:
 		return m.section(fmt.Sprintf("Joining %s", m.roomID), "Password:")
 	case phaseConnecting:
@@ -665,9 +705,8 @@ func (m Model) chatView() string {
 	// as tall as the terminal — one row more and a full-screen app scrolls its own
 	// display, which looks like the program tearing itself in half.
 	b.WriteString(m.viewport.View())
-	b.WriteString("\n\n")
-	b.WriteString(m.input.View())
 	b.WriteString("\n")
+	b.WriteString(m.inputBox())
 	return b.String()
 }
 
@@ -731,6 +770,36 @@ func elide(roomID string, limit int) string {
 // Below five rows there is nowhere to put a status bar, a transcript and an input
 // line at once. The frame keeps its minimum rather than rendering nothing, and a
 // terminal that small is on its own.
+// inputBox draws the input inside a border exactly as wide as the terminal and
+// exactly three rows tall.
+//
+// Both caps are load-bearing rather than defensive. lipgloss wraps content to fit
+// a width, so without MaxHeight a prompt longer than a narrow box turns three rows
+// into four and the frame stops matching the terminal; and MaxWidth covers the one
+// frame after a resize where the input's scroll offset is still the old one.
+func (m Model) inputBox() string {
+	return inputBoxStyle.
+		Width(m.width - inputBoxStyle.GetHorizontalBorderSize()).
+		MaxHeight(3).
+		MaxWidth(m.width).
+		Render(m.input.View())
+}
+
+// fitInput sizes the text field to what is left inside the box, so a long message
+// scrolls sideways instead of wrapping the box open.
+func (m *Model) fitInput() {
+	inner := m.width - inputBoxStyle.GetHorizontalBorderSize() - inputBoxStyle.GetHorizontalPadding()
+
+	// bubbles counts the visible characters, so the prompt and the cursor's own
+	// column come off the top.
+	m.input.Width = max(1, inner-lipgloss.Width(m.input.Prompt)-1)
+
+	// The scroll offset is recomputed in textinput's Update, not its View, so a
+	// width set here would not take effect until the next keystroke. SetCursor
+	// recomputes it now.
+	m.input.SetCursor(m.input.Position())
+}
+
 func (m Model) transcriptHeight() int {
 	return max(1, m.height-chatChrome)
 }
@@ -742,6 +811,8 @@ func (m Model) transcriptHeight() int {
 // already have changed underneath the question. The flag is written where the
 // user actually decides: scrolling away, or sending something.
 func (m *Model) syncViewport() {
+	m.fitInput()
+
 	m.viewport.Width = m.width
 	m.viewport.Height = m.transcriptHeight()
 	m.viewport.SetContent(strings.Join(m.rows(), "\n"))
@@ -758,6 +829,28 @@ func (m *Model) syncViewport() {
 
 func (m *Model) note(text string) {
 	m.entries = append(m.entries, entry{body: "— " + text + " —", notice: true})
+}
+
+// plain is an indented system line without note's dashes, for a value the user is
+// meant to select and copy — dashes would come along with the selection. The
+// indent lives in prefix so that a wrap hangs under it instead of resetting to
+// column zero.
+func (m *Model) plain(text string) {
+	m.entries = append(m.entries, entry{prefix: "    ", body: text, notice: true})
+}
+
+// invite writes what another person needs to get here. Never the password: it
+// travels out of band, and §9.2 shows it once.
+//
+// The room id gets a line to itself rather than being embedded in a ready-made
+// command. An eight-word id plus a relay URL is close to a hundred columns, so a
+// one-line command wraps on any normal terminal — and a wrapped command is worse
+// than no command, because selecting it drags in a newline that splits it in two
+// when pasted. The id always fits, and the id is the part you actually send.
+func (m *Model) invite() {
+	m.note("Share this room id")
+	m.plain(m.roomID)
+	m.note(fmt.Sprintf("They run: skulk join <that id> --server %s", m.cfg.Server))
 }
 
 func (m *Model) appendMessage(message relay.Message) {
