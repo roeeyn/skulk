@@ -146,7 +146,7 @@ annotation.
 ## Current state
 
 **Both languages green.** `Skulkd.Protocol.validate/3` (ROJ-32) and `protocol.Validate`
-(ROJ-33) accept and reject all 59 vectors identically, with identical codes.
+(ROJ-33) accept and reject all 60 vectors identically, with identical codes.
 
 That sentence is the point of this whole directory. Design A13 traded a shared Rust crate
 for two independent codecs, and from ROJ-29 until now, "the two implementations agree" was a
@@ -200,7 +200,7 @@ asserts the same codes. Two vectors behave differently there, both correctly:
   absent from the v0 registry because nothing could raise it, and
   `invalid/error-code-server-capacity.json` asserted that absence; ROJ-39 deleted it and
   added the code to `registry.json` in the same commit, exactly as its notes instructed.
-  `valid/error-frame-server-capacity.json` replaces it. The vector total is unchanged at 59
+  `valid/error-frame-server-capacity.json` replaces it. The vector total was unchanged at 59
   because one moved from `invalid/` to `valid/`.
 - At M1 this corpus seeds the property/fuzz suite (spec §22.3). Any mutation the fuzzer finds
   that the two implementations disagree on gets frozen here as a new vector.

@@ -102,15 +102,15 @@ config :skulkd,
   room_ttl_ms: :timer.hours(120),            # idle rooms are deleted, not archived
   max_rooms: 10_000,
   max_members_per_room: 32,                  # the 33rd joiner gets `room_full`
-  max_history_messages: 1_000,               # per room — see the note below
-  max_history_bytes: 4 * 1024 * 1024,        # per room — see the note below
+  max_history_messages: 1_000,               # per room
+  max_history_bytes: 4 * 1024 * 1024,        # per room
   max_total_history_bytes: 512 * 1024 * 1024 # across every room
 ```
 
-The two per-room history bounds are read but not yet acted on. They are enforced by
-evicting the oldest messages rather than by refusing new ones, and that eviction is the
-next piece of work; until it lands, a room's own history is bounded only by the global
-byte cap. The other four are live.
+The two per-room bounds are enforced by **evicting the oldest messages**, not by refusing
+new ones — a busy room keeps working, it just stops remembering the beginning. Someone who
+joins later sees whatever is still retained, so their transcript starts partway in. The
+global bound is the one that refuses.
 
 Past a limit the relay answers `server_capacity`, which says nothing about *which* limit
 was reached — the numbers are not something an unauthenticated caller gets to map out.
@@ -174,7 +174,7 @@ construction, the first agent-to-agent conversation skulk supports.
 
 The relay and the client have **independent protocol implementations in different
 languages**, so a golden frame corpus keeps them honest: both walk
-`docs/protocol/corpus/` and must accept and reject all 59 vectors identically, with
+`docs/protocol/corpus/` and must accept and reject all 60 vectors identically, with
 identical error codes, or CI fails.
 
 ## Status

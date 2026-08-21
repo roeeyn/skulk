@@ -300,8 +300,10 @@ by connection. A `chat.send` on a connection that has not joined is answered
 | `text` empty or absent, `message_id` malformed | `invalid_message` |
 | `text` > `4096` UTF-8 bytes | `message_too_large` |
 | Whole frame > `16384` bytes | `message_too_large` |
+| Encoded message alone exceeds the room's history byte cap (§15) | `message_too_large` |
 | Not yet joined | `room_not_found` |
 | Room expired | `room_expired` |
+| Global retained history exhausted (§8) | `server_capacity` |
 
 An accepted `chat.send` refreshes the room TTL. Nothing else does (spec §14).
 
@@ -413,7 +415,7 @@ is what its own notes instructed.
 | `room_expired` | The room expired before or during the operation. | yes |
 | `room_full` | Participant cap reached (§8, default `32`). | no |
 | `server_capacity` | A §8 global bound is exhausted — the active-room cap, or retained history across every room. Deliberately does not say which. | no |
-| `message_too_large` | A frame or a `text` field exceeded a bound in §2.1 / §4. | frame-bound: yes; `text`-bound: no |
+| `message_too_large` | A frame or a `text` field exceeded a bound in §2.1 / §4, or one encoded message alone exceeded the room's whole history byte cap (§15). | frame-bound: yes; `text`- and history-bound: no |
 | `invalid_message` | The frame or one of its fields is structurally invalid. | per rule (§7) |
 | `unsupported_protocol_version` | `v` is not `0`. | yes |
 | `unsupported_frame_type` | A binary WebSocket frame, or a `type` outside the registry. | binary: yes; unknown type: no |
