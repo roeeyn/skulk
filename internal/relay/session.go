@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
@@ -95,6 +96,8 @@ type Session struct {
 	conn   *websocket.Conn
 	events chan Event
 
+	done chan struct{}
+
 	mu       sync.Mutex
 	pending  map[string]chan result
 	closed   bool
@@ -109,8 +112,28 @@ type result struct {
 	err   error
 }
 
+// DefaultKeepalive is how often an otherwise idle session sends a protocol ping.
+//
+// It has to be comfortably under the relay's WebSocket idle timeout, which Bandit
+// enforces by closing the connection with code 1002. Ten minutes of not typing is
+// ordinary — you read a long message and think about it — so without this a healthy
+// session dies of silence.
+const DefaultKeepalive = 2 * time.Minute
+
+// Options tune a session. The zero value is what production uses.
+type Options struct {
+	// Keepalive is the ping interval. Zero means DefaultKeepalive; negative
+	// disables keepalives entirely (tests that assert timeout behaviour want that).
+	Keepalive time.Duration
+}
+
 // Dial connects to a relay. The URL must already have passed CheckServerURL.
 func Dial(ctx context.Context, endpoint string) (*Session, error) {
+	return DialWithOptions(ctx, endpoint, Options{})
+}
+
+// DialWithOptions is Dial with the knobs exposed, for tests.
+func DialWithOptions(ctx context.Context, endpoint string, opts Options) (*Session, error) {
 	conn, _, err := websocket.Dial(ctx, endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to relay: %w", err)
@@ -125,9 +148,44 @@ func Dial(ctx context.Context, endpoint string) (*Session, error) {
 		conn:    conn,
 		events:  make(chan Event, 64),
 		pending: make(map[string]chan result),
+		done:    make(chan struct{}),
 	}
 	go s.read()
+
+	if interval := opts.Keepalive; interval >= 0 {
+		if interval == 0 {
+			interval = DefaultKeepalive
+		}
+		go s.keepalive(interval)
+	}
 	return s, nil
+}
+
+// keepalive answers the relay's idle timeout with the thing protocol v0 §5.10
+// specified for it. The relay replies `pong` and — per spec §14 — a ping does NOT
+// refresh the room's TTL, so this keeps the CONNECTION alive without keeping rooms
+// alive: a room still expires after its inactivity window regardless of how many
+// clients are politely holding sockets open.
+func (s *Session) keepalive(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.done:
+			return
+		case <-ticker.C:
+			ctx, cancel := context.WithTimeout(context.Background(), interval)
+			err := s.Ping(ctx)
+			cancel()
+
+			if err != nil {
+				// The read loop owns disconnect reporting; a failed ping just means
+				// there is nothing left to keep alive.
+				return
+			}
+		}
+	}
 }
 
 // Events yields everything the relay pushes unprompted. It is closed when the
@@ -356,6 +414,8 @@ func (s *Session) fail(reason string) {
 }
 
 func (s *Session) shutdown() {
+	close(s.done)
+
 	s.mu.Lock()
 	s.closed = true
 	waiters := s.pending

@@ -576,3 +576,186 @@ func TestResizeDoesNotGarbleTheTranscript(t *testing.T) {
 	tm.Send(tea.KeyMsg{Type: tea.KeyCtrlC})
 	tm.WaitFinished(t, teatest.WithFinalTimeout(5*time.Second))
 }
+
+// ---------------------------------------------------------------------------
+// Transcript wrapping — regression tests for a reported bug: long messages were
+// cut off at the terminal edge rather than wrapped, because the model stored a
+// pre-formatted line per message and never consulted the width it was told about.
+// ---------------------------------------------------------------------------
+
+const longMessage = "This is the kind of answer an assistant gives: it runs well past eighty " +
+	"columns without a single newline in it, and it keeps going for quite a while longer still, " +
+	"which is exactly the case that used to disappear off the right-hand edge of the terminal."
+
+func rendered(t *testing.T, m tea.Model) []string {
+	t.Helper()
+	return strings.Split(strings.TrimRight(m.View(), "\n"), "\n")
+}
+
+func widest(lines []string) (int, string) {
+	worst, at := 0, ""
+	for _, line := range lines {
+		if w := lipgloss.Width(line); w > worst {
+			worst, at = w, line
+		}
+	}
+	return worst, at
+}
+
+func TestLongMessagesWrapToTheTerminalWidth(t *testing.T) {
+	session := newFakeSession(info())
+	m, pumpCmd := connected(t, session, false)
+	m, _ = step(m, tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	m, _ = pump(t, m, pumpCmd, session, relay.Event{Kind: relay.EventMessage, Message: relay.Message{
+		SenderUsername: "bright-fox-17", Sequence: 1,
+		ReceivedAt: "2026-08-20T14:07:52.418Z", Text: longMessage,
+	}})
+
+	lines := rendered(t, m)
+	if w, at := widest(lines); w > 80 {
+		t.Errorf("a line is %d columns wide in an 80-column terminal:\n%q", w, at)
+	}
+
+	// Wrapped, not truncated: the tail must still be on screen somewhere.
+	if !strings.Contains(strings.Join(lines, " "), "right-hand edge of the terminal") {
+		t.Errorf("the end of the message was lost:\n%s", m.View())
+	}
+}
+
+// Continuation lines hang under the message body, not under the timestamp, so a
+// wrapped message still reads as one message.
+func TestWrappedMessagesHangUnderTheirBody(t *testing.T) {
+	session := newFakeSession(info())
+	m, pumpCmd := connected(t, session, false)
+	m, _ = step(m, tea.WindowSizeMsg{Width: 80, Height: 40})
+
+	m, _ = pump(t, m, pumpCmd, session, relay.Event{Kind: relay.EventMessage, Message: relay.Message{
+		SenderUsername: "bright-fox-17", Sequence: 1,
+		ReceivedAt: "2026-08-20T14:07:52.418Z", Text: longMessage,
+	}})
+
+	lines := rendered(t, m)
+	var first, second string
+	for i, line := range lines {
+		if strings.Contains(line, "14:07") {
+			first = line
+			if i+1 < len(lines) {
+				second = lines[i+1]
+			}
+			break
+		}
+	}
+	if first == "" || second == "" {
+		t.Fatalf("expected a wrapped message:\n%s", m.View())
+	}
+
+	indent := strings.Index(first, "This is the kind")
+	if indent <= 0 {
+		t.Fatalf("could not locate the message body in %q", first)
+	}
+	if got := len(second) - len(strings.TrimLeft(second, " ")); got != indent {
+		t.Errorf("continuation indent = %d, want %d (aligned under the body)\n  %q\n  %q",
+			got, indent, first, second)
+	}
+}
+
+// Re-wrapping on resize is why entries are stored unwrapped: a line wrapped when it
+// arrived would stay wrapped to the old width forever.
+func TestTranscriptRewrapsOnResize(t *testing.T) {
+	session := newFakeSession(info())
+	m, pumpCmd := connected(t, session, false)
+	m, _ = step(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	m, _ = pump(t, m, pumpCmd, session, relay.Event{Kind: relay.EventMessage, Message: relay.Message{
+		SenderUsername: "bright-fox-17", Sequence: 1,
+		ReceivedAt: "2026-08-20T14:07:52.418Z", Text: longMessage,
+	}})
+
+	for _, width := range []int{120, 100, 80, 60, 40, 30} {
+		m, _ = step(m, tea.WindowSizeMsg{Width: width, Height: 40})
+		if w, at := widest(rendered(t, m)); w > width {
+			t.Errorf("at width %d a line is %d columns:\n%q", width, w, at)
+		}
+	}
+}
+
+// Wide characters are two columns each, so a rune count is the wrong measure.
+func TestWideCharactersWrapByColumnNotRuneCount(t *testing.T) {
+	session := newFakeSession(info())
+	m, pumpCmd := connected(t, session, false)
+	m, _ = step(m, tea.WindowSizeMsg{Width: 60, Height: 30})
+
+	m, _ = pump(t, m, pumpCmd, session, relay.Event{Kind: relay.EventMessage, Message: relay.Message{
+		SenderUsername: "bright-fox-17", Sequence: 1,
+		ReceivedAt: "2026-08-20T14:07:52.418Z",
+		Text:       strings.Repeat("潜行する狐は静かに動く", 8),
+	}})
+
+	if w, at := widest(rendered(t, m)); w > 60 {
+		t.Errorf("wide-character line is %d columns in a 60-column terminal:\n%q", w, at)
+	}
+}
+
+// The input line must survive a transcript full of wrapped messages — the height
+// arithmetic has to count rendered rows, not messages.
+func TestInputStaysOnScreenWhenMessagesWrap(t *testing.T) {
+	session := newFakeSession(info())
+	m, pumpCmd := connected(t, session, false)
+	m, _ = step(m, tea.WindowSizeMsg{Width: 60, Height: 12})
+
+	for i := 1; i <= 10; i++ {
+		m, pumpCmd = pump(t, m, pumpCmd, session, relay.Event{Kind: relay.EventMessage, Message: relay.Message{
+			SenderUsername: "bright-fox-17", Sequence: i,
+			ReceivedAt: "2026-08-20T14:07:52.418Z", Text: longMessage,
+		}})
+	}
+
+	lines := rendered(t, m)
+	if len(lines) > 12 {
+		t.Errorf("rendered %d rows into a 12-row terminal", len(lines))
+	}
+	if !strings.Contains(lines[len(lines)-1], ">") {
+		t.Errorf("the input prompt was pushed off screen; last row is %q", lines[len(lines)-1])
+	}
+}
+
+// The status bar is the third place the width bug lived: an eight-word room id is
+// ~48 columns on its own, so a narrow terminal overflowed there too. Found by the
+// resize test above rather than by inspection.
+func TestStatusBarFitsNarrowTerminals(t *testing.T) {
+	session := newFakeSession(info())
+	m, _ := connected(t, session, false)
+
+	for _, width := range []int{120, 80, 60, 40, 30, 20, 12} {
+		m, _ = step(m, tea.WindowSizeMsg{Width: width, Height: 20})
+
+		status := rendered(t, m)[0]
+		if w := lipgloss.Width(status); w > width {
+			t.Errorf("status bar is %d columns in a %d-column terminal: %q", w, width, status)
+		}
+		// The word "online" is droppable on a tiny terminal; the count is not,
+		// because "am I alone in here?" is what the bar is for.
+		if !strings.Contains(status, "1") {
+			t.Errorf("at width %d the participant count was lost: %q", width, status)
+		}
+	}
+}
+
+// Eliding keeps both ends, so a human can still tell which room they are in.
+func TestStatusBarElisionKeepsBothEndsOfTheRoomID(t *testing.T) {
+	session := newFakeSession(info())
+	m, _ := connected(t, session, false)
+	m, _ = step(m, tea.WindowSizeMsg{Width: 44, Height: 20})
+
+	status := rendered(t, m)[0]
+	if !strings.HasPrefix(status, "amber-") {
+		t.Errorf("elided id lost its head: %q", status)
+	}
+	if !strings.Contains(status, "-star") {
+		t.Errorf("elided id lost its tail: %q", status)
+	}
+	if !strings.Contains(status, "…") {
+		t.Errorf("elision should be visible: %q", status)
+	}
+}

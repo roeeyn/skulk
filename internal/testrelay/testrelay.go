@@ -30,6 +30,7 @@ type Relay struct {
 
 	mu    sync.Mutex
 	rooms map[string]*room
+	pings int
 }
 
 // Every connection is its own goroutine, so room state needs a lock. The real
@@ -63,6 +64,13 @@ func (r *Relay) URL() string {
 }
 
 func (r *Relay) Stop() { r.server.Close() }
+
+// Pings is how many application-level pings this relay has answered.
+func (r *Relay) Pings() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.pings
+}
 
 func (r *Relay) handle(w http.ResponseWriter, req *http.Request) {
 	conn, err := websocket.Accept(w, req, nil)
@@ -188,6 +196,10 @@ func (r *Relay) dispatch(conn *websocket.Conn, frame protocol.Frame, joined *roo
 		return joined, self
 
 	case "ping":
+		r.mu.Lock()
+		r.pings++
+		r.mu.Unlock()
+
 		send(conn, protocol.Frame{
 			V: protocol.Version, Type: "pong", RequestID: frame.RequestID,
 			Payload: map[string]any{},

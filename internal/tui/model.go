@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/roeeyn/skulk/internal/protocol"
 	"github.com/roeeyn/skulk/internal/relay"
@@ -52,6 +53,18 @@ func (o Outcome) ExitCode() int {
 	default:
 		return 1
 	}
+}
+
+// entry is one logical transcript line, stored UNWRAPPED.
+//
+// Wrapping happens at render time, not here, because the terminal can be resized
+// after a message arrives — a line wrapped on arrival would stay wrapped to the old
+// width forever. Keeping prefix and body apart is what lets continuation lines hang
+// under the message instead of under the timestamp.
+type entry struct {
+	prefix string
+	body   string
+	notice bool
 }
 
 type phase int
@@ -95,7 +108,7 @@ type Model struct {
 	session  Session
 	info     *relay.Info
 	events   <-chan relay.Event
-	lines    []string
+	entries  []entry
 	online   int
 	roomID   string
 	username string
@@ -490,7 +503,7 @@ func (m Model) View() string {
 		if m.err != "" {
 			return fmt.Sprintf("%s\n", m.err)
 		}
-		return strings.Join(m.lines, "\n") + "\n"
+		return strings.Join(m.rows(), "\n") + "\n"
 	default:
 		return m.chatView()
 	}
@@ -525,18 +538,76 @@ func (m Model) section(heading, prompt string) string {
 func (m Model) chatView() string {
 	var b strings.Builder
 
-	b.WriteString(statusStyle.Render(fmt.Sprintf("%s  ·  %d online", m.roomID, m.online)))
+	b.WriteString(statusStyle.Render(m.statusBar()))
 	b.WriteString("\n\n")
 
-	lines := m.lines
-	if visible := m.transcriptHeight(); visible > 0 && len(lines) > visible {
-		lines = lines[len(lines)-visible:]
+	rows := m.rows()
+	if visible := m.transcriptHeight(); visible > 0 && len(rows) > visible {
+		rows = rows[len(rows)-visible:]
 	}
-	b.WriteString(strings.Join(lines, "\n"))
+	b.WriteString(strings.Join(rows, "\n"))
 	b.WriteString("\n\n")
 	b.WriteString(m.input.View())
 	b.WriteString("\n")
 	return b.String()
+}
+
+// statusBar is wireframe panel 1's thin bar: room and participant count.
+//
+// The room id is eight words — 48 columns is typical — so on a narrow terminal the
+// bar overflows the screen exactly the way long messages used to. The wireframe
+// already shows the answer: elide the middle of the id and keep both ends, which is
+// what a human needs to recognise which room they are in.
+func (m Model) statusBar() string {
+	width := m.width
+	if width <= 0 {
+		width = 80
+	}
+
+	// On a very narrow terminal the word "online" is a luxury; the NUMBER is not,
+	// because "am I alone in here?" is the question the bar exists to answer.
+	count := fmt.Sprintf("  ·  %d online", m.online)
+	if lipgloss.Width(count) > width/2 {
+		count = fmt.Sprintf("  ·  %d", m.online)
+	}
+
+	room := m.roomID
+	if available := width - lipgloss.Width(count); lipgloss.Width(room) > available {
+		room = elide(room, available)
+	}
+
+	// Final guard: at absurd widths nothing fits properly, and overflowing the
+	// screen is worse than losing characters.
+	return ansi.Truncate(room+count, width, "")
+}
+
+// elide shortens a hyphenated room id from the middle, keeping the first words and
+// the last one: amber-river-copper-…-star.
+func elide(roomID string, limit int) string {
+	if limit < 5 {
+		return ansi.Truncate(roomID, max(limit, 1), "")
+	}
+
+	words := strings.Split(roomID, "-")
+	if len(words) < 3 {
+		return ansi.Truncate(roomID, limit, "…")
+	}
+
+	last := words[len(words)-1]
+	tail := "…-" + last
+
+	head := ""
+	for _, word := range words[:len(words)-1] {
+		candidate := head + word + "-"
+		if lipgloss.Width(candidate+tail) > limit {
+			break
+		}
+		head = candidate
+	}
+	if head == "" {
+		return ansi.Truncate(roomID, limit, "…")
+	}
+	return head + tail
 }
 
 func (m Model) transcriptHeight() int {
@@ -549,12 +620,66 @@ func (m Model) transcriptHeight() int {
 }
 
 func (m *Model) note(text string) {
-	m.lines = append(m.lines, noticeStyle.Render("— "+text+" —"))
+	m.entries = append(m.entries, entry{body: "— " + text + " —", notice: true})
 }
 
 func (m *Model) appendMessage(message relay.Message) {
-	m.lines = append(m.lines, fmt.Sprintf("%s  %-16s %s",
-		clockOf(message.ReceivedAt), message.SenderUsername, message.Text))
+	m.entries = append(m.entries, entry{
+		prefix: fmt.Sprintf("%s  %-16s ", clockOf(message.ReceivedAt), message.SenderUsername),
+		body:   message.Text,
+	})
+}
+
+// rows renders the transcript to actual terminal rows, wrapped to width.
+//
+// A message is one entry but can be many rows, which is why the visible-height
+// arithmetic counts rows rather than entries: counting entries would push the input
+// line off the bottom of the screen as soon as anyone said something long.
+func (m Model) rows() []string {
+	width := m.width
+	if width <= 0 {
+		width = 80
+	}
+
+	var out []string
+	for _, e := range m.entries {
+		indent := lipgloss.Width(e.prefix)
+
+		// Too narrow to hang the body under the prefix: wrap the whole line flat
+		// rather than producing a one-word-per-row column.
+		if width-indent < 24 {
+			for _, line := range wrap(e.prefix+e.body, width) {
+				out = append(out, style(line, e.notice))
+			}
+			continue
+		}
+
+		for i, line := range wrap(e.body, width-indent) {
+			if i == 0 {
+				out = append(out, style(e.prefix+line, e.notice))
+			} else {
+				out = append(out, style(strings.Repeat(" ", indent)+line, e.notice))
+			}
+		}
+	}
+	return out
+}
+
+// wrap word-wraps to a column limit, breaking words only when they do not fit at
+// all, and measuring wide characters correctly — a line of CJK is twice as wide as
+// its rune count suggests.
+func wrap(text string, limit int) []string {
+	if limit < 1 {
+		return []string{text}
+	}
+	return strings.Split(ansi.WrapWc(text, limit, " "), "\n")
+}
+
+func style(line string, notice bool) string {
+	if notice {
+		return noticeStyle.Render(line)
+	}
+	return line
 }
 
 // clockOf renders HH:MM from protocol v0's canonical timestamp. It is display
