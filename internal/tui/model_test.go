@@ -1380,3 +1380,22 @@ func TestANarrowTerminalScrollsTheInputRatherThanGrowingTheBox(t *testing.T) {
 		}
 	}
 }
+
+// Every prompt in the app is the same composing region. A bare `>` on the
+// password screens and a box in the chat read as two different programs.
+func TestPasswordPromptsSitInTheSameBox(t *testing.T) {
+	for _, joining := range []bool{false, true} {
+		session := newFakeSession(info())
+		m := tea.Model(tui.New(config(session, joining)))
+		m, _ = step(m, tea.WindowSizeMsg{Width: 80, Height: 24})
+
+		if !strings.Contains(m.View(), "╭") || !strings.Contains(m.View(), "╰") {
+			t.Errorf("joining=%v: the password prompt is not boxed:\n%s", joining, m.View())
+		}
+		// §9.2 still holds: a box is not an excuse to echo.
+		m = typeText(m, "unmistakable-secret-value")
+		if strings.Contains(m.View(), "unmistakable-secret-value") {
+			t.Errorf("joining=%v: the boxed prompt echoed the password:\n%s", joining, m.View())
+		}
+	}
+}

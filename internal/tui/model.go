@@ -725,7 +725,7 @@ func (m Model) createPasswordView() string {
 	if m.err != "" {
 		b.WriteString("\n" + m.err + "\n")
 	}
-	b.WriteString("\n" + m.input.View() + "\n")
+	b.WriteString("\n" + m.inputBox() + "\n")
 	return b.String()
 }
 
@@ -736,7 +736,7 @@ func (m Model) section(heading, prompt string) string {
 	if m.err != "" {
 		b.WriteString("\n" + m.err + "\n")
 	}
-	b.WriteString("\n" + m.input.View() + "\n")
+	b.WriteString("\n" + m.inputBox() + "\n")
 	return b.String()
 }
 
