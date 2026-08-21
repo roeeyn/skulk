@@ -93,7 +93,18 @@ defmodule Skulkd.Frames do
   rather than passed in from a call site that might have a password in scope.
   """
   def error(code, request_id \\ nil) do
-    reply("error", request_id, %{"code" => to_string(code), "message" => message(code)})
+    reply("error", request_id, %{"code" => wire_code(code), "message" => message(code)})
+  end
+
+  # §6 registers exactly eleven codes and BOTH codecs enum-validate the field, so a
+  # frame carrying anything else is one this relay's own validator would reject.
+  # Internal failure reasons do reach here — `no_username_available` from an
+  # exhausted namespace is the reachable-in-principle example — and the honest
+  # thing to tell a client about a reason it has no vocabulary for is
+  # `internal_error`.
+  defp wire_code(code) do
+    code = to_string(code)
+    if code in Skulkd.Protocol.error_codes(), do: code, else: "internal_error"
   end
 
   defp message(:room_not_found), do: "room not found"

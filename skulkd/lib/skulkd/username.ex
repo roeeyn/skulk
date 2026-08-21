@@ -6,8 +6,10 @@ defmodule Skulkd.Username do
   among currently-connected members, and change on every reconnect. Nothing
   cryptographic depends on them.
 
-  Amendment A12 (do not reuse a username that appears in retained history) is M1;
-  M0 guarantees uniqueness among connected members only.
+  Amendment A12 — do not reuse a username that appears in retained history — is
+  enforced by the caller: this module avoids whatever set it is given, and
+  `Skulkd.Room` is what decides that the set includes the senders of retained
+  messages as well as the members currently connected.
   """
 
   @adjectives ~w(
@@ -22,12 +24,33 @@ defmodule Skulkd.Username do
     lemur numbat ocelot puffin quail rook serval tanuki urchin viper
   )
 
+  @doc "The adjectives half of the namespace."
+  @spec adjectives() :: [String.t()]
+  def adjectives, do: @adjectives
+
+  @doc "The animals half of the namespace."
+  @spec animals() :: [String.t()]
+  def animals, do: @animals
+
+  @doc """
+  How many distinct usernames exist: `30 x 30 x 100`.
+
+  Worth being able to assert rather than assume. Spec §8 caps a room at 32
+  participants and 1,000 retained messages, so at most ~1,032 names can be
+  unavailable at once — a little over one percent of the space, which is what makes
+  the bounded retry below overwhelmingly likely to succeed on its first draw.
+  """
+  @spec namespace() :: pos_integer()
+  def namespace, do: length(@adjectives) * length(@animals) * 100
+
   @doc """
   A username not present in `taken`.
 
-  The namespace is ~90,000 and spec §8 caps a room at 32 participants, so the retry
-  loop is not a livelock risk. It is bounded anyway: an exhausted namespace should
-  surface as an error, not a hung `GenServer`.
+  `taken` is every name that is unavailable, which since amendment A12 means the
+  connected members AND the senders of every retained message — see
+  `Skulkd.Room`. The retry loop is bounded: an exhausted namespace has to surface
+  as a value the room can reply with, because the alternative is a room process
+  that never answers the join it is in the middle of.
   """
   @spec generate(taken :: Enumerable.t()) :: {:ok, String.t()} | {:error, :no_username_available}
   def generate(taken \\ []) do

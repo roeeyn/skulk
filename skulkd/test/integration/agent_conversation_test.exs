@@ -104,6 +104,54 @@ defmodule Skulkd.Integration.AgentConversationTest do
 
   # ---------------------------------------------------------------------------
 
+  describe "amendment A12: a departed name is not handed to someone else (ROJ-43)" do
+    test "history stays attributed to who actually said it", %{server: server} do
+      # Plumbing rather than the discriminator, and worth saying so: the namespace
+      # is ninety thousand names, so "the new arrival did not happen to be given
+      # the old one's name" would pass without the fix roughly 89,999 times in
+      # 90,000. The unit suite injects a generator to make the relay's notion of
+      # what is taken directly observable. What this adds is the end-to-end
+      # attribution fact through real clients: A8 captures the sender's name into
+      # the stored message, so it survives the sender leaving.
+      alice = agent(server)
+      room = create(alice)
+
+      say(alice, "alice was here")
+      alice_name = who(alice)["participants"] |> hd() |> Map.fetch!("username")
+      quit(alice)
+
+      bob = agent(server)
+      {:ok, bob_session} = join(bob, room["room_id"], room["password"])
+      assert eventually(fn -> length(who(bob)["participants"]) == 1 end)
+
+      # The name is still in the transcript, so it is still spoken for.
+      refute bob_session["data"]["username"] == alice_name
+
+      say(bob, "bob is here now")
+
+      carol = agent(server)
+      {:ok, carol_session} = join(carol, room["room_id"], room["password"])
+      history = carol_session["data"]["history"]
+
+      # Two messages, each still attributed to whoever actually sent it — one of
+      # them by someone who has already disconnected.
+      assert Enum.map(history, & &1["text"]) == ["alice was here", "bob is here now"]
+
+      assert Enum.map(history, & &1["sender_username"]) == [
+               alice_name,
+               bob_session["data"]["username"]
+             ]
+
+      # And nobody present is wearing a name the transcript already spends.
+      present = Enum.map(who(carol)["participants"], & &1["username"])
+      refute alice_name in present
+      assert length(Enum.uniq(present)) == length(present)
+
+      quit(bob)
+      quit(carol)
+    end
+  end
+
   describe "the documented transcript (docs/headless-v1.md §13)" do
     test "two agents hold the conversation the specification describes", %{server: server} do
       alice = agent(server)
