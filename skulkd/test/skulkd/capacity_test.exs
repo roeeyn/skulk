@@ -333,9 +333,13 @@ defmodule Skulkd.CapacityTest do
       limit = div(rooms * (per_room * sample_size() + Enum.sum(Enum.map(sizes, &byte_size/1))), 2)
       cap = capacity(limit)
 
+      # Members that read and discard. The default member is the test process, and
+      # thirty-two rooms broadcasting eighty messages each would put it several
+      # thousand frames behind ROJ-42's backlog bound — at which point the relay
+      # disconnects it, correctly, and this test measures nothing.
       sessions =
         for _ <- 1..rooms do
-          {room_id, session} = create(capacity: cap)
+          {room_id, session} = create(capacity: cap, member: MemberStub.sink())
           {room_id, session.sender_id}
         end
 
@@ -469,6 +473,8 @@ defmodule Skulkd.CapacityTest do
             {:max_history_messages, 11, &Limits.max_history_messages/0},
             {:max_history_bytes, 13, &Limits.max_history_bytes/0},
             {:max_total_history_bytes, 17, &Limits.max_total_history_bytes/0},
+            # §21 rather than §8 — see the backpressure suite for its default.
+            {:max_member_backlog, 23, &Limits.max_member_backlog/0},
             {:room_ttl_ms, 19, &Limits.room_ttl_ms/0}
           ] do
         original = Application.fetch_env(:skulkd, key)

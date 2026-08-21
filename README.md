@@ -104,13 +104,21 @@ config :skulkd,
   max_members_per_room: 32,                  # the 33rd joiner gets `room_full`
   max_history_messages: 1_000,               # per room
   max_history_bytes: 4 * 1024 * 1024,        # per room
-  max_total_history_bytes: 512 * 1024 * 1024 # across every room
+  max_total_history_bytes: 512 * 1024 * 1024, # across every room
+  max_member_backlog: 500                     # frames one client may fall behind
 ```
 
 The two per-room bounds are enforced by **evicting the oldest messages**, not by refusing
 new ones — a busy room keeps working, it just stops remembering the beginning. Someone who
 joins later sees whatever is still retained, so their transcript starts partway in. The
 global bound is the one that refuses.
+
+A client that stops keeping up is **disconnected abruptly** — no error frame, no close
+code. Nothing the relay could send it would arrive: the queue of frames it has not read is
+the problem, and anything else would go to the back of that same queue. This bound is
+**best-effort**, and it is worth saying so plainly: the relay can see how many frames are
+waiting to be written to a connection, but not the ones already handed to the operating
+system. It cuts off runaway growth; it is not an exact ceiling on memory.
 
 Past a limit the relay answers `server_capacity`, which says nothing about *which* limit
 was reached — the numbers are not something an unauthenticated caller gets to map out.

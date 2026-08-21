@@ -32,7 +32,9 @@ defmodule Skulkd.Limits do
     max_members_per_room: 32,
     max_history_messages: 1_000,
     max_history_bytes: 4 * 1024 * 1024,
-    max_total_history_bytes: 512 * 1024 * 1024
+    max_total_history_bytes: 512 * 1024 * 1024,
+    # §21 and design A13 rather than §8's table.
+    max_member_backlog: 500
   }
 
   @doc "Room inactivity TTL (§8: `120h`). Only an accepted chat message refreshes it (§14)."
@@ -65,6 +67,23 @@ defmodule Skulkd.Limits do
   """
   @spec max_history_bytes() :: pos_integer()
   def max_history_bytes, do: get(:max_history_bytes)
+
+  @doc """
+  Maximum frames queued for one member before the relay disconnects it.
+
+  Not one of §8's numbers. §21 requires a bound — "slow clients MUST not block a
+  room's broadcast loop indefinitely" — and leaves the figure to the
+  implementation; design A13 picked `500`.
+
+  **Best-effort, and it matters that it is described that way.**
+  `Process.info(pid, :message_queue_len)` is a snapshot, and frames beyond it sit
+  in Bandit's socket write buffer and the kernel's send buffer, neither of which
+  the relay can see. The guarantee is that runaway growth is cut off, not an exact
+  byte ceiling. A bound described as exact when it is approximate is worse than no
+  bound, because someone will reason about it.
+  """
+  @spec max_member_backlog() :: pos_integer()
+  def max_member_backlog, do: get(:max_member_backlog)
 
   @doc "Maximum retained encoded history across all rooms (§8: `512 MiB`)."
   @spec max_total_history_bytes() :: pos_integer()

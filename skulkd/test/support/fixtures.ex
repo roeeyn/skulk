@@ -48,14 +48,77 @@ defmodule Skulkd.MemberStub do
     spawn(fn -> loop(owner) end)
   end
 
+  @doc """
+  Wedges the stub's mailbox with `count` messages it will never take out.
+
+  The loop below is a *selective* receive: it matches `{:push, _}`, `:drain` and
+  `:stop`, and nothing else. So `:junk` accumulates and counts toward
+  `message_queue_len` while real pushes keep draining — which is what makes the
+  ROJ-42 backpressure boundary testable to the exact message, with no frame
+  counting and no sleeping.
+  """
+  def wedge(pid, count) do
+    for _ <- 1..count, do: send(pid, :junk)
+    :ok
+  end
+
+  @doc """
+  A member that reads its mailbox and throws everything away.
+
+  For tests that flood a room and care about the room's state rather than about
+  what arrived. The default member is the test process itself, which forwards
+  nothing and drains nothing — past ROJ-42's backlog bound the relay quite
+  correctly disconnects it, which is a true result and a useless test.
+  """
+  def sink do
+    spawn(fn -> sink_loop() end)
+  end
+
+  defp sink_loop do
+    receive do
+      _anything -> sink_loop()
+    end
+  end
+
+  @doc "Flushes the wedged junk, putting the stub back under any backlog bound."
+  def drain(pid), do: send(pid, :drain)
+
+  @doc """
+  Blocks until the stub has processed everything already in its mailbox.
+
+  Without this, a test racing the room's own pushes would be measuring a mailbox
+  that is still settling.
+  """
+  def settle(pid) do
+    send(pid, {:push, :settle})
+
+    receive do
+      {:pushed, ^pid, :settle} -> :ok
+    after
+      1_000 -> raise "stub never settled"
+    end
+  end
+
   defp loop(owner) do
     receive do
       {:push, frame} ->
         send(owner, {:pushed, self(), frame})
         loop(owner)
 
+      :drain ->
+        flush_junk()
+        loop(owner)
+
       :stop ->
         :ok
+    end
+  end
+
+  defp flush_junk do
+    receive do
+      :junk -> flush_junk()
+    after
+      0 -> :ok
     end
   end
 
