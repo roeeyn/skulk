@@ -1,0 +1,18 @@
+{
+  "name": "unpaired-low-surrogate-escape",
+  "description": "A lone low surrogate escape, which no preceding high surrogate can pair with.",
+  "frame_type": "chat.send",
+  "direction": "c2r",
+  "receiver": "relay",
+  "expect": {
+    "result": "reject",
+    "error_code": "invalid_message",
+    "rule": "V4",
+    "close": true
+  },
+  "wire": {
+    "kind": "text",
+    "raw": "{\"v\":0,\"type\":\"chat.send\",\"request_id\":\"3f2a7c1e-9b4d-4e28-8a51-6c0d2e7f9b13\",\"payload\":{\"message_id\":\"9c1e5a20-4b7d-4f61-b8e3-2d5a7c0f1846\",\"text\":\"\\udc00\"}}"
+  },
+  "notes": "The other half of the surrogate check: a high surrogate is rejected when nothing follows it, and a low one is rejected when it arrives on its own."
+}

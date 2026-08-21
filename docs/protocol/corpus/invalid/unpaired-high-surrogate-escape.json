@@ -1,0 +1,18 @@
+{
+  "name": "unpaired-high-surrogate-escape",
+  "description": "A lone high surrogate written as a JSON escape. V3's UTF-8 scan does not see it \u2014 the frame bytes are valid UTF-8 and the surrogate only appears once the escape is resolved.",
+  "frame_type": "chat.send",
+  "direction": "c2r",
+  "receiver": "relay",
+  "expect": {
+    "result": "reject",
+    "error_code": "invalid_message",
+    "rule": "V4",
+    "close": true
+  },
+  "wire": {
+    "kind": "text",
+    "raw": "{\"v\":0,\"type\":\"chat.send\",\"request_id\":\"3f2a7c1e-9b4d-4e28-8a51-6c0d2e7f9b13\",\"payload\":{\"message_id\":\"9c1e5a20-4b7d-4f61-b8e3-2d5a7c0f1846\",\"text\":\"\\ud800\"}}"
+  },
+  "notes": "Found by ROJ-44's differential fuzzing. Go substituted U+FFFD and accepted; Jason rejected. V3 had already decided this \u2014 valid UTF-8 has no representation for an unpaired surrogate \u2014 so the Go codec was out of spec. Escaped rather than raw on purpose: raw surrogate bytes are a V3 rejection and a different code path."
+}

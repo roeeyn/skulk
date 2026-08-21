@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"regexp"
 	"unicode/utf8"
 )
@@ -263,14 +264,28 @@ func Decode(receiver Role, kind Kind, frame []byte) (Frame, *Rejection) {
 		return f, &Rejection{CodeInvalidMessage, "V3", true}
 	}
 
-	// V4 — parses as JSON, and the top level is an object.
+	// V4 — parses as JSON, the top level is an object, no key repeats at any depth,
+	// and no string carries an unpaired surrogate escape (D13). Both extra checks
+	// run HERE rather than as a pre-pass, because §7.1's rule order is the
+	// cross-language contract: a frame that breaks several rules at once has to
+	// produce the same code in both languages.
+	if rej := checkStrictJSON(frame); rej != nil {
+		return f, rej
+	}
+
 	var envelope map[string]any
 	dec := json.NewDecoder(bytes.NewReader(frame))
 	dec.UseNumber() // so V5 can tell the integer 0 from the float 0.0
 	if err := dec.Decode(&envelope); err != nil {
 		return f, &Rejection{CodeInvalidMessage, "V4", true}
 	}
-	if dec.More() {
+	// Nothing may follow the object but whitespace. `dec.More()` is NOT this check
+	// and was the bug ROJ-44's differential fuzzing found: it reports whether
+	// another element follows in the current array or object, so it answers false
+	// precisely when the next byte is `}` or `]` — and `{...}}` sailed through while
+	// Elixir rejected it. Asking for the next token instead is unambiguous: a
+	// complete frame is followed by io.EOF and nothing else.
+	if _, err := dec.Token(); err != io.EOF {
 		return f, &Rejection{CodeInvalidMessage, "V4", true}
 	}
 
@@ -535,6 +550,160 @@ func pattern(value string, re *regexp.Regexp, maxBytes int) *Rejection {
 		return invalid()
 	}
 	return nil
+}
+
+// checkStrictJSON enforces the two halves of D13 that encoding/json will not.
+//
+// Duplicate keys: encoding/json keeps the LAST occurrence and Jason keeps the
+// FIRST, so `{"text":"harmless","text":"actual"}` is a frame the relay validates
+// as one thing and every client displays as another. Rejecting removes the shape
+// rather than picking a winner.
+//
+// Unpaired surrogate escapes: V3's UTF-8 scan catches surrogates spelled as raw
+// bytes, but `\ud800` as an ESCAPE survives it and is resolved during parsing,
+// where encoding/json substitutes U+FFFD and accepts. V3 already decided this —
+// valid UTF-8 has no representation for an unpaired surrogate — so this is Go
+// coming into spec, not a new rule.
+func checkStrictJSON(frame []byte) *Rejection {
+	if rej := unpairedSurrogateEscape(frame); rej != nil {
+		return rej
+	}
+	return duplicateKeys(frame)
+}
+
+// unpairedSurrogateEscape scans the RAW bytes, not the decoded strings. By the
+// time a string is decoded an unpaired surrogate has already become U+FFFD, which
+// is indistinguishable from a U+FFFD the sender legitimately typed — and rejecting
+// that would be a fresh divergence in the other direction.
+//
+// Scanning the whole frame rather than tracking string boundaries is safe: a `\u`
+// outside a string is unparseable JSON, which V4 rejects with this same code.
+func unpairedSurrogateEscape(frame []byte) *Rejection {
+	for i := 0; i < len(frame); i++ {
+		if frame[i] != '\\' {
+			continue
+		}
+		// `\\` is an escaped backslash: consume both so the character after it is
+		// read as literal text rather than as the start of an escape.
+		if i+1 < len(frame) && frame[i+1] != 'u' {
+			i++
+			continue
+		}
+
+		value, ok := hex4(frame, i+2)
+		if !ok {
+			continue // malformed escape; V4's parse rejects it
+		}
+
+		switch {
+		case value >= 0xD800 && value <= 0xDBFF:
+			// A high surrogate is only legal immediately followed by a low one.
+			low, ok := hex4(frame, i+8)
+			if !ok || i+6 >= len(frame) || frame[i+6] != '\\' || frame[i+7] != 'u' ||
+				low < 0xDC00 || low > 0xDFFF {
+				return &Rejection{CodeInvalidMessage, "V4", true}
+			}
+			i += 11
+		case value >= 0xDC00 && value <= 0xDFFF:
+			// A low surrogate reached on its own: its pair would have consumed it.
+			return &Rejection{CodeInvalidMessage, "V4", true}
+		default:
+			i += 5
+		}
+	}
+
+	return nil
+}
+
+func hex4(frame []byte, at int) (int, bool) {
+	if at+4 > len(frame) {
+		return 0, false
+	}
+
+	value := 0
+	for _, b := range frame[at : at+4] {
+		switch {
+		case b >= '0' && b <= '9':
+			value = value<<4 | int(b-'0')
+		case b >= 'a' && b <= 'f':
+			value = value<<4 | int(b-'a'+10)
+		case b >= 'A' && b <= 'F':
+			value = value<<4 | int(b-'A'+10)
+		default:
+			return 0, false
+		}
+	}
+	return value, true
+}
+
+// duplicateKeys walks the token stream depth-first. Token order from a
+// json.Decoder means each nested value is finished before the next key of its
+// parent arrives, so one map per object is enough and no stack is needed.
+func duplicateKeys(frame []byte) *Rejection {
+	dec := json.NewDecoder(bytes.NewReader(frame))
+	dec.UseNumber()
+	rej, _ := scanValue(dec)
+	return rej
+}
+
+// scanValue returns any rejection, and whether the walk can safely continue.
+//
+// The second return value is not defensive tidiness — without it this function
+// spins forever on `[,]`. `More()` reports whether the next byte is something
+// other than `]` or `}`, so on a stray comma it keeps promising an element that
+// `Token()` cannot deliver, and a loop that treats a token error as "skip this
+// one" never advances. That is an unauthenticated caller pinning a relay CPU with
+// three bytes. ROJ-44's differential harness caught it before it shipped, which is
+// most of the argument for building the harness.
+//
+// So: any JSON error stops the walk immediately. Diagnosing malformed input is
+// Decode's job, one code path deciding one thing.
+func scanValue(dec *json.Decoder) (*Rejection, bool) {
+	token, err := dec.Token()
+	if err != nil {
+		return nil, false
+	}
+
+	delim, ok := token.(json.Delim)
+	if !ok {
+		return nil, true // a scalar, already consumed
+	}
+
+	switch delim {
+	case '{':
+		seen := map[string]bool{}
+		for dec.More() {
+			key, err := dec.Token()
+			if err != nil {
+				return nil, false
+			}
+			name, ok := key.(string)
+			if !ok {
+				return nil, false
+			}
+			if seen[name] {
+				return &Rejection{CodeInvalidMessage, "V4", true}, false
+			}
+			seen[name] = true
+
+			if rej, ok := scanValue(dec); rej != nil || !ok {
+				return rej, false
+			}
+		}
+	case '[':
+		for dec.More() {
+			if rej, ok := scanValue(dec); rej != nil || !ok {
+				return rej, false
+			}
+		}
+	}
+
+	// The closing delimiter. An error here means malformed input, which Decode
+	// reports; either way there is nothing further to walk.
+	if _, err := dec.Token(); err != nil {
+		return nil, false
+	}
+	return nil, true
 }
 
 func invalid() *Rejection { return &Rejection{CodeInvalidMessage, "V13", false} }

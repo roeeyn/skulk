@@ -451,7 +451,7 @@ about which code to emit. Validation runs in this order and **stops at the first
 | **V1** | The WebSocket frame is a **text** frame. | `unsupported_frame_type` | yes |
 | **V2** | Frame size ≤ `16384` bytes. *Relay only* (**D2**). | `message_too_large` | yes |
 | **V3** | Frame bytes are valid UTF-8. | `invalid_message` | yes |
-| **V4** | Bytes parse as JSON, and the top-level value is an **object**. | `invalid_message` | yes |
+| **V4** | Bytes parse as JSON, and the top-level value is an **object**. No object at any depth repeats a key, and no string contains an unpaired surrogate escape (**D13**). | `invalid_message` | yes |
 | **V5** | `v` is present and is an integer. | `invalid_message` | yes |
 | **V6** | `v` equals `0`. | `unsupported_protocol_version` | yes |
 | **V7** | `type` is present and is a string. | `invalid_message` | yes |
@@ -649,6 +649,27 @@ Spec §16.3 lists `history.snapshot` for v1; the M0 registry in ROJ-29 does not.
 history makes "authenticated with a consistent snapshot" a single atomic frame, which removes
 the interleaving question v1 has to answer with a boundary protocol. If §8's caps make the
 frame unwieldy at M1, chunking is an additive change to `join.ok`, not a new type.
+
+**D13 — V4 rejects duplicate keys and unpaired surrogate escapes.** Both were found by
+ROJ-44's differential fuzzing, and both are the same failure: the specification was silent, so
+each codec picked a reasonable answer and they picked different ones.
+
+On duplicate keys, Go's `encoding/json` keeps the **last** occurrence and Elixir's Jason keeps
+the **first**. `{"v":9,"v":0,...}` is therefore a frame the relay accepts as v0 while a client
+reads it as v9 — and, more to the point, `{"text":"harmless","text":"actual"}` is a message the
+relay validates as one thing and every client displays as another. That is request smuggling in
+miniature, and picking a winner would leave the shape in place for M2 and M3 to inherit along
+with their new payload fields. Rejecting outright removes it.
+
+On surrogates, **V3 had already decided this** — "valid UTF-8" has no representation for an
+unpaired surrogate — but only for surrogates spelled as raw bytes. `\ud800` as a JSON *escape*
+survives the UTF-8 scan and is resolved during parsing, where Go substitutes U+FFFD and accepts
+while Jason rejects. So this half is Go being out of spec rather than a new rule; V4 is where it
+is enforced because V4 is where parsing happens.
+
+Both checks run **in V4's position**, not as a pre-pass and not after V13. The order is the
+contract (§7.1): a frame that breaks several rules at once must produce the same code in both
+languages, and a check bolted on at the wrong point disagrees on exactly those frames.
 
 **D12 — `chat.send` carries no `room_id`.** A connection is bound to exactly one room from
 the moment `create.ok` / `join.ok` is delivered, so a client-supplied `room_id` would be

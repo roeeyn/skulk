@@ -183,8 +183,13 @@ defmodule Skulkd.Protocol do
   def direction(:relay), do: :c2r
   def direction(:client), do: :r2c
 
-  @doc "The ten protocol v0 error codes (§6)."
+  @doc "The eleven protocol v0 error codes (§6)."
+  @spec error_codes() :: [String.t()]
   def error_codes, do: @error_codes
+
+  @doc "Every `type` in the §5 registry, in either direction."
+  @spec frame_types() :: [String.t()]
+  def frame_types, do: MapSet.to_list(@known_types)
 
   @doc """
   Whether a value is a usable `request_id`.
@@ -218,12 +223,57 @@ defmodule Skulkd.Protocol do
     if String.valid?(frame), do: :ok, else: {:error, :invalid_message, true}
   end
 
+  # V4 — parses as JSON, the top level is an object, and no object at any depth
+  # repeats a key (decision D13).
+  #
+  # Jason keeps the FIRST occurrence of a repeated key and Go's encoding/json keeps
+  # the LAST, so `{"text":"harmless","text":"actual"}` is a frame this relay would
+  # validate as one thing and every client would display as another. ROJ-44's
+  # differential fuzzing found it; rejecting removes the shape instead of picking a
+  # winner, which matters because M2 and M3 add payload fields to inherit it.
+  #
+  # The duplicate scan needs the raw bytes — by the time Jason has built a map the
+  # duplicates are already gone — so the frame is decoded twice: once as ordered
+  # pairs to look for repeats, once normally for everything downstream. A frame is
+  # at most 16 KiB.
+  #
+  # Unpaired surrogate escapes need no check here: Jason already rejects them,
+  # which is what made them a divergence in the first place.
   defp v4_json_object(frame) do
-    case Jason.decode(frame) do
-      {:ok, decoded} when is_map(decoded) -> {:ok, decoded}
+    with {:ok, ordered} <- Jason.decode(frame, objects: :ordered_objects),
+         :ok <- no_duplicate_keys(ordered),
+         {:ok, decoded} when is_map(decoded) <- Jason.decode(frame) do
+      {:ok, decoded}
+    else
       _ -> {:error, :invalid_message, true}
     end
   end
+
+  defp no_duplicate_keys(%Jason.OrderedObject{values: pairs}) do
+    keys = Enum.map(pairs, &elem(&1, 0))
+
+    if length(Enum.uniq(keys)) == length(keys) do
+      Enum.reduce_while(pairs, :ok, fn {_key, value}, :ok ->
+        case no_duplicate_keys(value) do
+          :ok -> {:cont, :ok}
+          error -> {:halt, error}
+        end
+      end)
+    else
+      :error
+    end
+  end
+
+  defp no_duplicate_keys(values) when is_list(values) do
+    Enum.reduce_while(values, :ok, fn value, :ok ->
+      case no_duplicate_keys(value) do
+        :ok -> {:cont, :ok}
+        error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp no_duplicate_keys(_scalar), do: :ok
 
   # is_integer, not is_number: JSON `0.0` decodes to a float and is not the integer
   # this field is specified as.

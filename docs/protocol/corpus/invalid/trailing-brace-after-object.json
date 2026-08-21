@@ -1,0 +1,18 @@
+{
+  "name": "trailing-brace-after-object",
+  "description": "A complete frame followed by one extra `}`. The bytes do not parse as a single JSON value, so V4 rejects them.",
+  "frame_type": "chat.send",
+  "direction": "c2r",
+  "receiver": "relay",
+  "expect": {
+    "result": "reject",
+    "error_code": "invalid_message",
+    "rule": "V4",
+    "close": true
+  },
+  "wire": {
+    "kind": "text",
+    "raw": "{\"v\":0,\"type\":\"chat.send\",\"request_id\":\"3f2a7c1e-9b4d-4e28-8a51-6c0d2e7f9b13\",\"payload\":{\"message_id\":\"9c1e5a20-4b7d-4f61-b8e3-2d5a7c0f1846\",\"text\":\"hello\"}}}"
+  },
+  "notes": "Found by ROJ-44's differential fuzzing. Go used json.Decoder.More() to detect trailing data, which reports whether another element follows in the CURRENT array or object \u2014 so it answers false exactly when the next byte is `}` or `]`, and this frame was accepted by Go while Elixir rejected it. The closing brace is the specific character that hid the bug, which is why the vector uses it rather than arbitrary garbage."
+}

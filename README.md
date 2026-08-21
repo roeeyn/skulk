@@ -187,7 +187,7 @@ construction, the first agent-to-agent conversation skulk supports.
 
 The relay and the client have **independent protocol implementations in different
 languages**, so a golden frame corpus keeps them honest: both walk
-`docs/protocol/corpus/` and must accept and reject all 60 vectors identically, with
+`docs/protocol/corpus/` and must accept and reject all 66 vectors identically, with
 identical error codes, or CI fails.
 
 ## Status

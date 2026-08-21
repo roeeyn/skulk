@@ -1,0 +1,18 @@
+{
+  "name": "duplicate-key-payload",
+  "description": "Two `text` keys inside the payload \u2014 the same divergence as duplicate-key-envelope, one level down, because the check has to recurse.",
+  "frame_type": "chat.send",
+  "direction": "c2r",
+  "receiver": "relay",
+  "expect": {
+    "result": "reject",
+    "error_code": "invalid_message",
+    "rule": "V4",
+    "close": true
+  },
+  "wire": {
+    "kind": "text",
+    "raw": "{\"v\":0,\"type\":\"chat.send\",\"request_id\":\"3f2a7c1e-9b4d-4e28-8a51-6c0d2e7f9b13\",\"payload\":{\"message_id\":\"9c1e5a20-4b7d-4f61-b8e3-2d5a7c0f1846\",\"text\":\"harmless\",\"text\":\"the one that is displayed\"}}"
+  },
+  "notes": "The payload is where it matters most: a message the relay validates as one thing and every client renders as another."
+}

@@ -151,6 +151,9 @@ jobs:
       - name: Build the client
         run: go build -o bin/skulk ./cmd/skulk
 
+      - name: Build the protocol oracle
+        run: go build -o bin/protocol-oracle ./cmd/protocol-oracle
+
       - name: mix deps.get
         working-directory: skulkd
         run: mix deps.get
@@ -160,4 +163,5 @@ jobs:
         env:
           # ROJ-35's harness reads this rather than building the client itself.
           SKULK_BIN: ${{ github.workspace }}/bin/skulk
+          SKULK_ORACLE_BIN: ${{ github.workspace }}/bin/protocol-oracle
         run: mix test.integration

@@ -1,0 +1,18 @@
+{
+  "name": "array-with-empty-element",
+  "description": "The three bytes `[,]` \u2014 an array whose first element is a stray comma. Not an object, so V4 rejects it.",
+  "frame_type": null,
+  "direction": "c2r",
+  "receiver": "relay",
+  "expect": {
+    "result": "reject",
+    "error_code": "invalid_message",
+    "rule": "V4",
+    "close": true
+  },
+  "wire": {
+    "kind": "text",
+    "raw": "[,]"
+  },
+  "notes": "A regression guard for a denial of service, not just a shape check. V4's duplicate-key walk (D13) uses json.Decoder.More(), which reports whether the next byte is something other than `]` or `}` \u2014 so on a stray comma it keeps promising an element that Token() cannot deliver, and a walk that treats a token error as 'skip this one' never advances. Three bytes from an unauthenticated caller pinned a relay CPU indefinitely. ROJ-44's differential harness caught it before it shipped. If either codec regresses, this vector hangs its suite rather than failing it."
+}
