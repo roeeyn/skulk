@@ -111,6 +111,10 @@ defmodule Skulkd.MixProject do
       {:argon2_elixir, "~> 4.0"},
       # Property-based tests for frame validation (§22.3 / A14)
       {:stream_data, "~> 1.1", only: [:test, :dev]},
+      # §22.3's dependency vulnerability check: `mix deps.audit` against the Hex
+      # advisory database. Not a runtime dependency of anything — it reads
+      # mix.lock and exits.
+      {:mix_audit, "~> 2.1", only: [:dev, :test], runtime: false},
       # A raw WebSocket client for transport tests — raw on purpose: the corpus
       # contains frames no well-behaved client would ever send (ROJ-32).
       #

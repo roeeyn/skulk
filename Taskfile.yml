@@ -22,6 +22,17 @@ vars:
   PORT: '{{.PORT | default "4000"}}'
   SERVER: 'ws://localhost:{{.PORT}}/v1/ws'
   CLIENT: bin/skulk
+  # §22.3's dependency checks. Pinned rather than @latest: a scanner that changes
+  # under you turns "CI went red and nothing changed" into a real possibility, and
+  # `go run tool@latest` is a supply-chain decision made silently on every run.
+  #
+  # .github/workflows/ci.yml pins the same two versions. Change both together.
+  GOVULNCHECK: v1.7.0
+  GO_LICENSES: v1.6.0
+  # Every license in the Go dependency tree today. The Elixir allowlist lives in
+  # skulkd/lib/mix/tasks/licenses.check.ex and is separate on purpose — widening
+  # one language's list should not quietly widen the other's.
+  GO_LICENSES_ALLOWED: MIT,ISC,BSD-3-Clause
 
 tasks:
   default:
@@ -134,6 +145,7 @@ tasks:
     cmds:
       - task: lint
       - task: test
+      - task: audit
 
   lint:
     desc: Format checks, vet, and a build
@@ -144,6 +156,28 @@ tasks:
       - go vet ./...
       - go build ./...
       - cd skulkd && mix format --check-formatted
+
+  audit:
+    desc: Dependency vulnerability and license checks, both languages (§22.3)
+    cmds:
+      - task: audit:client
+      - task: audit:relay
+
+  audit:client:
+    desc: govulncheck and the license allowlist for the Go client
+    cmds:
+      # Symbol-level by default: a vulnerability in a package we import but never
+      # call does not fail this. `-scan module` is the stricter reading, and the
+      # noisier one.
+      - go run golang.org/x/vuln/cmd/govulncheck@{{.GOVULNCHECK}} ./...
+      - go run github.com/google/go-licenses@{{.GO_LICENSES}} check ./... --allowed_licenses={{.GO_LICENSES_ALLOWED}}
+
+  audit:relay:
+    desc: mix_audit and the license allowlist for the Elixir relay
+    dir: skulkd
+    cmds:
+      - mix deps.audit
+      - mix licenses.check
 
   clean:
     desc: Remove build output

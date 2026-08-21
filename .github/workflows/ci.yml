@@ -1,12 +1,17 @@
 name: CI
 
-# The fast loop only: relay tests, client tests, and the integration lane, on every
-# push to main and every PR. Cross-platform build matrix, release artifacts, and the
-# Docker relay image are M5 (ROJ-38+) and deliberately not here. Target: under 5 minutes.
+# The fast loop: relay tests, client tests, the integration lane, and §22.3's
+# dependency checks, on every push to main and every PR. Cross-platform build
+# matrix and release artifacts are M1.5 (ROJ-52, ROJ-53) and not here yet.
+# Target: under 5 minutes — the four jobs above run in parallel.
 on:
   push:
     branches: [main]
   pull_request:
+  # A vulnerability database changes without anyone touching this repository, so a
+  # scan that only runs on commits stops protecting a quiet week. Mondays, early.
+  schedule:
+    - cron: "17 6 * * 1"
 
 # A new push to a PR makes the in-flight run obsolete; don't pay for it twice.
 concurrency:
@@ -110,6 +115,77 @@ jobs:
       # fake relay. The cost is a couple of seconds.
       - name: go test
         run: go test -race ./...
+
+  # ---------------------------------------------------------------------------
+  # §22.3: "Run dependency vulnerability and license checks in CI." Its own job
+  # rather than steps bolted onto relay/client, because a red lane here means a
+  # dependency moved, not that the code broke — and that distinction is worth a
+  # name on the checks list.
+  #
+  # Every check FAILS the build. A warning nobody has to act on is a warning
+  # nobody acts on; §22.3 asks for checks, and a check that cannot say no isn't
+  # one.
+  #
+  # Tool versions are pinned and mirrored in Taskfile.yml (`task audit` runs
+  # exactly these four commands). Change both together.
+  audit:
+    name: audit · dependencies, both languages
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GOVULNCHECK: v1.7.0
+      GO_LICENSES: v1.6.0
+      GO_LICENSES_ALLOWED: MIT,ISC,BSD-3-Clause
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Set up Erlang/OTP + Elixir
+        uses: erlef/setup-beam@v1
+        id: beam
+        with:
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+          otp-version: ${{ env.OTP_VERSION }}
+
+      - name: Cache deps and _build
+        uses: actions/cache@v6
+        with:
+          path: |
+            skulkd/deps
+            skulkd/_build
+          key: mix-${{ runner.os }}-otp${{ steps.beam.outputs.otp-version }}-elixir${{ steps.beam.outputs.elixir-version }}-${{ hashFiles('skulkd/mix.lock') }}
+          restore-keys: |
+            mix-${{ runner.os }}-otp${{ steps.beam.outputs.otp-version }}-elixir${{ steps.beam.outputs.elixir-version }}-
+
+      # Symbol-level scanning: a vulnerability in a package we import but never
+      # call does not fail this. The first run of this check found fourteen that
+      # DID reach called code, all in the standard library, and the fix was the
+      # Go bump in this same ticket.
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@${{ env.GOVULNCHECK }} ./...
+
+      # Go modules carry no license metadata, so this classifies by reading
+      # LICENSE files. The Elixir side does not need a tool for the same job —
+      # see skulkd/lib/mix/tasks/licenses.check.ex for why.
+      - name: go-licenses
+        run: go run github.com/google/go-licenses@${{ env.GO_LICENSES }} check ./... --allowed_licenses=${{ env.GO_LICENSES_ALLOWED }}
+
+      - name: mix deps.get
+        working-directory: skulkd
+        run: mix deps.get
+
+      - name: mix deps.audit
+        working-directory: skulkd
+        run: mix deps.audit
+
+      - name: mix licenses.check
+        working-directory: skulkd
+        run: mix licenses.check
 
   # ---------------------------------------------------------------------------
   # ExUnit drives everything (design A14): the relay boots in-process and real
