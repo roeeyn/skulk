@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -94,12 +95,13 @@ type Config struct {
 type Model struct {
 	cfg Config
 
-	phase   phase
-	input   textinput.Model
-	width   int
-	height  int
-	status  string
-	outcome Outcome
+	phase    phase
+	input    textinput.Model
+	viewport viewport.Model
+	width    int
+	height   int
+	status   string
+	outcome  Outcome
 
 	suggested  string
 	password   string
@@ -114,9 +116,21 @@ type Model struct {
 	username string
 	senderID string
 
-	quitting bool // a first Ctrl+C has been seen
-	err      string
+	quitting  bool // a first Ctrl+C has been seen
+	following bool // the transcript is pinned to the live edge
+	err       string
 }
+
+// The chat frame's fixed rows: a status bar, a blank line, the transcript, a
+// blank line, the input. Alt-screen means the app owns exactly the rows it was
+// given, so the transcript takes whatever is left and never one row more.
+const chatChrome = 4
+
+// Fallback geometry for a model that has not been told the terminal size yet.
+const (
+	defaultWidth  = 80
+	defaultHeight = 24
+)
 
 // New builds a model for either flow. Nothing connects until the password is in.
 func New(cfg Config) Model {
@@ -125,7 +139,19 @@ func New(cfg Config) Model {
 	input.CharLimit = protocol.MaxTextBytes
 	input.Focus()
 
-	m := Model{cfg: cfg, input: input, roomID: cfg.RoomID}
+	// A model that is never told the terminal size still has to render — most of
+	// this package's tests drive Update directly and never send a WindowSizeMsg,
+	// and a viewport of height zero shows nothing at all. Default here, and let the
+	// resize that arrives on startup override it.
+	m := Model{
+		cfg:       cfg,
+		input:     input,
+		roomID:    cfg.RoomID,
+		width:     defaultWidth,
+		height:    defaultHeight,
+		viewport:  viewport.New(defaultWidth, defaultHeight-chatChrome),
+		following: true,
+	}
 
 	if cfg.Joining {
 		m.phase = phaseJoinPassword
@@ -142,11 +168,33 @@ func New(cfg Config) Model {
 		}
 		m.maskInput()
 	}
+	m.syncViewport()
 	return m
+}
+
+// NewProgram builds the bubbletea program skulk runs, full-screen.
+//
+// Alt-screen is a program option rather than a tea.EnterAltScreen command
+// returned from Init, because bubbletea's own documentation warns that commands
+// run asynchronously: one returned from Init races the first render and can leave
+// a stray frame behind in the scrollback it was supposed to preserve. Keeping it
+// here also leaves exactly one definition of what a skulk program is, which is
+// what lets a test run the real thing.
+func NewProgram(model Model, opts ...tea.ProgramOption) *tea.Program {
+	return tea.NewProgram(model, append([]tea.ProgramOption{tea.WithAltScreen()}, opts...)...)
 }
 
 // Outcome reports how the session ended, for the caller's exit code.
 func (m Model) Outcome() Outcome { return m.outcome }
+
+// Reason reports why the session ended, empty on a clean exit.
+//
+// It exists because the program runs full-screen: leaving the alternate screen
+// restores whatever was on the terminal before skulk started, which takes the
+// final frame with it. An explanation that only ever lived on screen would be
+// erased at exactly the moment the user needs to read it, so cmd/skulk prints
+// this to stderr after the program returns.
+func (m Model) Reason() string { return m.err }
 
 func (m *Model) maskInput() {
 	// Spec §9.2: password prompts never echo.
@@ -189,9 +237,25 @@ type whoMsg struct {
 // --------------------------------------------------------------------------
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	next, cmd := m.update(msg)
+
+	// The one place where the viewport is made to agree with the entries and the
+	// terminal size, run after every message. Syncing at each append instead would
+	// mean every future caller of note() has to remember to.
+	next.syncViewport()
+	return next, cmd
+}
+
+func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width, m.height = msg.Width, msg.Height
+		// Clamped here so that nothing downstream has to ask whether it has a size.
+		if msg.Width > 0 {
+			m.width = msg.Width
+		}
+		if msg.Height > 0 {
+			m.height = msg.Height
+		}
 		return m, nil
 
 	case tea.KeyMsg:
@@ -230,7 +294,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleEvent(msg.event)
 
 	case eventsClosedMsg:
+		if m.leaving() {
+			return m, nil
+		}
 		m.note("Disconnected from the relay.")
+		m.err = "disconnected from the relay"
 		if m.outcome == OutcomeOK {
 			m.outcome = OutcomeTransport
 		}
@@ -262,7 +330,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyCtrlC:
 		// Spec §6.3: the first Ctrl+C is /quit; a second terminates immediately.
@@ -276,6 +344,20 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyEnter:
 		return m.handleEnter()
+
+	// Scrolling is handled here and the key is never forwarded, in either
+	// direction. bubbles' viewport binds f, b, u, d, j, k, h, l and space by
+	// default, so handing it a KeyMsg would make typing those letters scroll the
+	// transcript; and forwarding PgUp to the input types into the message box.
+	case tea.KeyPgUp:
+		m.viewport.PageUp()
+		m.following = m.viewport.AtBottom()
+		return m, nil
+
+	case tea.KeyPgDown:
+		m.viewport.PageDown()
+		m.following = m.viewport.AtBottom()
+		return m, nil
 	}
 
 	var cmd tea.Cmd
@@ -283,7 +365,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m Model) handleEnter() (tea.Model, tea.Cmd) {
+func (m Model) handleEnter() (Model, tea.Cmd) {
 	value := m.input.Value()
 
 	switch m.phase {
@@ -346,7 +428,12 @@ func (m Model) handleEnter() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) submit(value string) (tea.Model, tea.Cmd) {
+func (m Model) submit(value string) (Model, tea.Cmd) {
+	// Acting on the room is a decision to be at the live edge: whatever this does,
+	// the user wants to see it happen rather than read about it later. It is also
+	// the way back down without paging there.
+	m.following = true
+
 	if !strings.HasPrefix(value, "/") {
 		session := m.session
 		return m, func() tea.Msg {
@@ -362,6 +449,7 @@ func (m Model) submit(value string) (tea.Model, tea.Cmd) {
 		m.note("/help — this message")
 		m.note("/who — who is in the room")
 		m.note("/quit — leave and exit")
+		m.note("PgUp / PgDn — scroll back; sending a message returns you to the latest")
 		m.note("The relay can read every message. skulk is not end-to-end encrypted yet.")
 		return m, nil
 
@@ -384,7 +472,16 @@ func (m Model) submit(value string) (tea.Model, tea.Cmd) {
 	}
 }
 
-func (m Model) handleEvent(event relay.Event) (tea.Model, tea.Cmd) {
+func (m Model) handleEvent(event relay.Event) (Model, tea.Cmd) {
+	// Closing the socket makes the relay's read loop fail, which emits a disconnect
+	// and then closes the event channel. That is the shutdown completing, not the
+	// relay dropping us: acting on it would race a clean exit code to 3 and — now
+	// that the reason is printed to stderr — tell the user their own /quit was a
+	// dropped connection.
+	if m.leaving() {
+		return m, nil
+	}
+
 	switch event.Kind {
 	case relay.EventMessage:
 		m.appendMessage(event.Message)
@@ -399,12 +496,14 @@ func (m Model) handleEvent(event relay.Event) (tea.Model, tea.Cmd) {
 
 	case relay.EventRoomExpired:
 		m.note("This room expired. Disconnecting.")
+		m.err = "this room expired"
 		m.outcome = OutcomeNoRoom
 		m.phase = phaseDone
 		return m, tea.Quit
 
 	case relay.EventDisconnect:
 		m.note(fmt.Sprintf("Disconnected: %s", event.Reason))
+		m.err = fmt.Sprintf("disconnected: %s", event.Reason)
 		m.outcome = OutcomeTransport
 		m.phase = phaseDone
 		return m, tea.Quit
@@ -412,7 +511,7 @@ func (m Model) handleEvent(event relay.Event) (tea.Model, tea.Cmd) {
 	return m, waitForEvent(m.events)
 }
 
-func (m Model) connect() (tea.Model, tea.Cmd) {
+func (m Model) connect() (Model, tea.Cmd) {
 	m.phase = phaseConnecting
 	m.status = "Connecting…"
 
@@ -449,6 +548,10 @@ func (m Model) connect() (tea.Model, tea.Cmd) {
 		return sessionReadyMsg{session: session, info: info}
 	}
 }
+
+// leaving reports that the user has already asked to go, whether by /quit or by
+// Ctrl+C. Everything the relay says after that point is teardown noise.
+func (m Model) leaving() bool { return m.quitting || m.phase == phaseDone }
 
 func (m Model) quit() tea.Cmd {
 	session := m.session
@@ -541,11 +644,10 @@ func (m Model) chatView() string {
 	b.WriteString(statusStyle.Render(m.statusBar()))
 	b.WriteString("\n\n")
 
-	rows := m.rows()
-	if visible := m.transcriptHeight(); visible > 0 && len(rows) > visible {
-		rows = rows[len(rows)-visible:]
-	}
-	b.WriteString(strings.Join(rows, "\n"))
+	// The viewport always renders exactly its own height, so the frame is exactly
+	// as tall as the terminal — one row more and a full-screen app scrolls its own
+	// display, which looks like the program tearing itself in half.
+	b.WriteString(m.viewport.View())
 	b.WriteString("\n\n")
 	b.WriteString(m.input.View())
 	b.WriteString("\n")
@@ -560,9 +662,6 @@ func (m Model) chatView() string {
 // what a human needs to recognise which room they are in.
 func (m Model) statusBar() string {
 	width := m.width
-	if width <= 0 {
-		width = 80
-	}
 
 	// On a very narrow terminal the word "online" is a luxury; the NUMBER is not,
 	// because "am I alone in here?" is the question the bar exists to answer.
@@ -610,13 +709,34 @@ func elide(roomID string, limit int) string {
 	return head + tail
 }
 
+// transcriptHeight is every row the chrome does not claim.
+//
+// Below five rows there is nowhere to put a status bar, a transcript and an input
+// line at once. The frame keeps its minimum rather than rendering nothing, and a
+// terminal that small is on its own.
 func (m Model) transcriptHeight() int {
-	// status bar + blank + blank + input + newline
-	const chrome = 5
-	if m.height <= chrome {
-		return 0
+	return max(1, m.height-chatChrome)
+}
+
+// syncViewport re-renders the transcript into the viewport at the current size.
+//
+// Whether to follow is answered by a flag rather than by asking the viewport
+// whether it is at the bottom, because by the time this runs the geometry may
+// already have changed underneath the question. The flag is written where the
+// user actually decides: scrolling away, or sending something.
+func (m *Model) syncViewport() {
+	m.viewport.Width = m.width
+	m.viewport.Height = m.transcriptHeight()
+	m.viewport.SetContent(strings.Join(m.rows(), "\n"))
+
+	if m.following {
+		m.viewport.GotoBottom()
+		return
 	}
-	return m.height - chrome
+
+	// Someone is reading history. Re-clamp rather than move them: a resize can
+	// shrink the transcript in rows under an offset that was valid a moment ago.
+	m.viewport.SetYOffset(m.viewport.YOffset)
 }
 
 func (m *Model) note(text string) {
@@ -637,9 +757,6 @@ func (m *Model) appendMessage(message relay.Message) {
 // line off the bottom of the screen as soon as anyone said something long.
 func (m Model) rows() []string {
 	width := m.width
-	if width <= 0 {
-		width = 80
-	}
 
 	var out []string
 	for _, e := range m.entries {

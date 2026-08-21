@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -321,7 +322,9 @@ func TestSupportedCommands(t *testing.T) {
 		m, _ = enter(m)
 
 		view := m.View()
-		for _, want := range []string{"/help", "/who", "/quit", "not end-to-end encrypted"} {
+		// PgUp/PgDn is in here because /help is currently the only place a user can
+		// find out the transcript scrolls at all. ROJ-47 gives it a better home.
+		for _, want := range []string{"/help", "/who", "/quit", "PgUp", "not end-to-end encrypted"} {
 			if !strings.Contains(view, want) {
 				t.Errorf("/help is missing %q:\n%s", want, view)
 			}
@@ -758,4 +761,369 @@ func TestStatusBarElisionKeepsBothEndsOfTheRoomID(t *testing.T) {
 	if !strings.Contains(status, "…") {
 		t.Errorf("elision should be visible: %q", status)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Full-screen chat (ROJ-46). The transcript used to be a hand-sliced "last N
+// rows", which meant anything older than one screen was gone for good. It is now
+// a viewport, and these tests pin the two properties that make it worth having:
+// it scrolls, and it does not yank you back to the bottom while you are reading.
+//
+// The scroll position is not observable from outside the package, so every
+// assertion here is made against rendered content. That is the honest test
+// anyway: what the user can see is the whole feature.
+// ---------------------------------------------------------------------------
+
+// marker returns the body of the n-th filler message. Zero-padded so that
+// "marker-30" is never a substring of another marker.
+func marker(n int) string { return fmt.Sprintf("marker-%02d", n) }
+
+// filled drives a model into chat at a known size and pushes enough short
+// messages that the transcript is several screens tall.
+func filled(t *testing.T, width, height, count int) (tea.Model, tea.Cmd, *fakeSession) {
+	t.Helper()
+
+	session := newFakeSession(info())
+	m, pumpCmd := connected(t, session, false)
+	m, _ = step(m, tea.WindowSizeMsg{Width: width, Height: height})
+
+	for i := 1; i <= count; i++ {
+		m, pumpCmd = pump(t, m, pumpCmd, session, relay.Event{Kind: relay.EventMessage, Message: relay.Message{
+			SenderUsername: "bright-fox-17", Sequence: i,
+			ReceivedAt: "2026-08-20T14:07:52.418Z", Text: marker(i),
+		}})
+	}
+	return m, pumpCmd, session
+}
+
+// The alt-screen half of the ticket: the program takes over the display and gives
+// the terminal back on exit, the way vim and htop do.
+//
+// This drives a real tea.Program rather than teatest, because alt-screen is a
+// program option and teatest builds its own Program with no way to pass one
+// through. tui.NewProgram is the single place that option lives, so running it
+// here tests exactly what cmd/skulk runs.
+func TestTheProgramRunsFullScreenAndRestoresTheTerminal(t *testing.T) {
+	session := newFakeSession(info())
+	out := &lockedBuffer{}
+
+	program := tui.NewProgram(tui.New(config(session, false)),
+		tea.WithInput(&bytes.Buffer{}), tea.WithOutput(out), tea.WithoutSignals())
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if _, err := program.Run(); err != nil {
+			t.Errorf("program failed: %v", err)
+		}
+	}()
+
+	program.Send(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	// \x1b[?1049h switches the terminal to its alternate screen buffer.
+	waitForOutput(t, out, "\x1b[?1049h")
+
+	program.Send(tea.KeyMsg{Type: tea.KeyEnter}) // accept the suggestion
+	program.Send(tea.KeyMsg{Type: tea.KeyEnter}) // confirm it was copied
+	waitForOutput(t, out, "Joined as quiet-otter-42")
+
+	program.Send(tea.KeyMsg{Type: tea.KeyCtrlC})
+	<-done
+
+	// \x1b[?1049l restores the buffer that was there before skulk started, which
+	// is the half of "full-screen" a user only notices when it is missing.
+	if !strings.Contains(out.String(), "\x1b[?1049l") {
+		t.Error("the program did not restore the terminal's previous contents on exit")
+	}
+}
+
+// PgUp reaches messages that scrolled off the top; PgDn comes back.
+func TestTheTranscriptScrollsBeyondOneScreen(t *testing.T) {
+	m, _, _ := filled(t, 80, 14, 30)
+
+	if view := m.View(); !strings.Contains(view, marker(30)) {
+		t.Fatalf("the newest message should be on screen:\n%s", view)
+	}
+	if view := m.View(); strings.Contains(view, marker(1)) {
+		t.Fatalf("30 messages cannot fit in a 14-row terminal; the view is not clipping:\n%s", view)
+	}
+
+	m, _ = step(m, tea.KeyMsg{Type: tea.KeyPgUp})
+
+	view := m.View()
+	if strings.Contains(view, marker(30)) {
+		t.Errorf("PgUp did not move the view:\n%s", view)
+	}
+	if !strings.Contains(view, marker(20)) {
+		t.Errorf("PgUp should reveal older messages:\n%s", view)
+	}
+
+	m, _ = step(m, tea.KeyMsg{Type: tea.KeyPgDown})
+
+	if view := m.View(); !strings.Contains(view, marker(30)) {
+		t.Errorf("PgDn should return to the newest messages:\n%s", view)
+	}
+}
+
+// Auto-follow: sitting at the bottom, a new message appears without a keystroke.
+func TestNewMessagesAutoFollowWhenTheViewIsAtTheBottom(t *testing.T) {
+	m, pumpCmd, session := filled(t, 80, 14, 30)
+
+	m, _ = pump(t, m, pumpCmd, session, relay.Event{Kind: relay.EventMessage, Message: relay.Message{
+		SenderUsername: "bright-fox-17", Sequence: 31,
+		ReceivedAt: "2026-08-20T14:09:00.000Z", Text: "the-newest-thing",
+	}})
+
+	if view := m.View(); !strings.Contains(view, "the-newest-thing") {
+		t.Errorf("a message that arrives while the view is at the bottom must be visible:\n%s", view)
+	}
+}
+
+// The one that matters: a client that yanks you to the bottom mid-sentence is
+// worse than one that cannot scroll at all.
+func TestNewMessagesDoNotYankTheViewWhenScrolledUp(t *testing.T) {
+	m, pumpCmd, session := filled(t, 80, 14, 30)
+
+	m, _ = step(m, tea.KeyMsg{Type: tea.KeyPgUp})
+	before := m.View()
+
+	m, pumpCmd = pump(t, m, pumpCmd, session, relay.Event{Kind: relay.EventMessage, Message: relay.Message{
+		SenderUsername: "bright-fox-17", Sequence: 31,
+		ReceivedAt: "2026-08-20T14:09:00.000Z", Text: "arrived-while-reading",
+	}})
+
+	if view := m.View(); strings.Contains(view, "arrived-while-reading") {
+		t.Errorf("a new message yanked the view back to the bottom:\n%s", view)
+	}
+	if view := m.View(); view != before {
+		t.Errorf("the view moved under the reader:\nbefore:\n%s\nafter:\n%s", before, view)
+	}
+
+	// And it is still there once the reader chooses to come back. Two presses,
+	// because paging down is exactly that — a page at a time — and the transcript
+	// grew by a row while it was being read.
+	m, _ = step(m, tea.KeyMsg{Type: tea.KeyPgDown})
+	m, _ = step(m, tea.KeyMsg{Type: tea.KeyPgDown})
+
+	if view := m.View(); !strings.Contains(view, "arrived-while-reading") {
+		t.Errorf("PgDn should catch up with what arrived while scrolled up:\n%s", view)
+	}
+
+	// Following resumes: the next message needs no keystroke.
+	m, _ = pump(t, m, pumpCmd, session, relay.Event{Kind: relay.EventMessage, Message: relay.Message{
+		SenderUsername: "bright-fox-17", Sequence: 32,
+		ReceivedAt: "2026-08-20T14:09:30.000Z", Text: "following-again",
+	}})
+
+	if view := m.View(); !strings.Contains(view, "following-again") {
+		t.Errorf("returning to the bottom should resume auto-follow:\n%s", view)
+	}
+}
+
+// Key routing has to be right in both directions, and each direction has its own
+// way of going wrong.
+//
+// bubbles' viewport binds f, b, u, d, j, k, h, l and space by default, so handing
+// it a KeyMsg would make typing those letters scroll the transcript. Forwarding
+// PgUp to the input types into the message box instead. The text below is exactly
+// the bound letters, typed while scrolled up so that any scrolling shows.
+func TestKeyRoutingKeepsScrollingAndTypingApart(t *testing.T) {
+	m, _, session := filled(t, 80, 14, 30)
+
+	m, _ = step(m, tea.KeyMsg{Type: tea.KeyPgUp})
+	if view := m.View(); !strings.Contains(view, marker(20)) {
+		t.Fatalf("expected to be scrolled up:\n%s", view)
+	}
+
+	m = typeText(m, "fudbjk hl")
+
+	view := m.View()
+	if !strings.Contains(view, marker(20)) || strings.Contains(view, marker(30)) {
+		t.Errorf("typing scrolled the transcript:\n%s", view)
+	}
+
+	m, _ = step(m, tea.KeyMsg{Type: tea.KeyPgDown})
+	m = typeText(m, " and a space")
+
+	m, cmd := enter(m)
+	run(cmd)
+
+	if got := session.sentMessages(); len(got) != 1 || got[0] != "fudbjk hl and a space" {
+		t.Errorf("scroll keys leaked into the message: %q", got)
+	}
+}
+
+// Typing while scrolled up works, and sending returns the view to the live edge —
+// you acted, so you want to see what happened.
+func TestSendingWhileScrolledUpJumpsBackToTheLatest(t *testing.T) {
+	m, _, session := filled(t, 80, 14, 30)
+
+	m, _ = step(m, tea.KeyMsg{Type: tea.KeyPgUp})
+	if view := m.View(); strings.Contains(view, marker(30)) {
+		t.Fatalf("expected to be scrolled up:\n%s", view)
+	}
+
+	m = typeText(m, "typed while reading history")
+	m, cmd := enter(m)
+	run(cmd)
+
+	if got := session.sentMessages(); len(got) != 1 || got[0] != "typed while reading history" {
+		t.Errorf("typing while scrolled up should still send: %q", got)
+	}
+	if view := m.View(); !strings.Contains(view, marker(30)) {
+		t.Errorf("sending should return the view to the live edge:\n%s", view)
+	}
+}
+
+// A model that never received a WindowSizeMsg still has to render: most tests in
+// this file drive Update directly and never send one, and a viewport of height
+// zero shows nothing at all.
+func TestAModelNeverToldTheTerminalSizeStillRenders(t *testing.T) {
+	session := newFakeSession(info())
+	m, _ := connected(t, session, false)
+
+	lines := rendered(t, m)
+	if len(lines) < 5 {
+		t.Fatalf("a default-sized model rendered %d rows:\n%s", len(lines), m.View())
+	}
+	if !strings.Contains(m.View(), "Joined as quiet-otter-42") {
+		t.Errorf("the transcript is empty at the default size:\n%s", m.View())
+	}
+	if !strings.Contains(lines[len(lines)-1], ">") {
+		t.Errorf("the input prompt is missing; last row is %q", lines[len(lines)-1])
+	}
+}
+
+// A full-screen app owns exactly the rows it was given. One row too many and the
+// terminal scrolls, which in alt-screen mode looks like the app tearing itself.
+func TestTheChatFrameIsExactlyTheTerminalHeight(t *testing.T) {
+	// Below five rows there is nowhere to put a status bar, a transcript and an
+	// input line, so the frame keeps its minimum and the terminal is on its own.
+	for _, size := range [][2]int{{80, 24}, {40, 10}, {120, 60}, {80, 6}, {100, 5}} {
+		m, _, _ := filled(t, size[0], size[1], 30)
+
+		if lines := rendered(t, m); len(lines) != size[1] {
+			t.Errorf("%dx%d rendered %d rows", size[0], size[1], len(lines))
+		}
+	}
+}
+
+// Resizing while scrolled up must not leave the offset pointing past the end of
+// a transcript that just got shorter in rows.
+func TestResizingWhileScrolledUpStaysInsideTheTranscript(t *testing.T) {
+	m, _, _ := filled(t, 60, 14, 30)
+	m, _ = step(m, tea.KeyMsg{Type: tea.KeyPgUp})
+
+	for _, size := range [][2]int{{200, 60}, {40, 8}, {120, 40}, {80, 6}} {
+		m, _ = step(m, tea.WindowSizeMsg{Width: size[0], Height: size[1]})
+
+		lines := rendered(t, m)
+		if len(lines) != size[1] {
+			t.Fatalf("%dx%d rendered %d rows", size[0], size[1], len(lines))
+		}
+		if w, at := widest(lines); w > size[0] {
+			t.Errorf("at width %d a line is %d columns:\n%q", size[0], w, at)
+		}
+	}
+}
+
+// Closing the socket makes the relay's read loop fail, which emits a disconnect
+// and closes the event channel. That is the shutdown completing, not the relay
+// dropping us — and acting on it would turn a clean /quit into exit 3 with a
+// "disconnected" line printed to stderr.
+func TestACleanQuitIsNotReportedAsADisconnect(t *testing.T) {
+	session := newFakeSession(info())
+	m, pumpCmd := connected(t, session, false)
+
+	// Queued before the quit, because closing the session closes the channel —
+	// which is the ordering production has: Close makes the read loop fail, the
+	// failure emits this event, and the channel closes behind it.
+	session.events <- relay.Event{Kind: relay.EventDisconnect, Reason: "relay closed the connection (1000)"}
+
+	m = typeText(m, "/quit")
+	m, cmd := enter(m)
+	run(cmd)
+
+	m, _ = step(m, run(pumpCmd))
+
+	if code := m.(tui.Model).Outcome().ExitCode(); code != 0 {
+		t.Errorf("a clean /quit exited %d, want 0", code)
+	}
+	if reason := m.(tui.Model).Reason(); reason != "" {
+		t.Errorf("a clean /quit reported %q", reason)
+	}
+}
+
+// Alt-screen restores the terminal on exit, which takes the final frame with it.
+// Anything the user needs to read after skulk stops has to leave through Reason
+// so cmd/skulk can print it to stderr.
+func TestFatalOutcomesCarryAReasonOutOfTheAltScreen(t *testing.T) {
+	t.Run("disconnect", func(t *testing.T) {
+		session := newFakeSession(info())
+		m, pumpCmd := connected(t, session, false)
+
+		m, _ = pump(t, m, pumpCmd, session,
+			relay.Event{Kind: relay.EventDisconnect, Reason: "relay closed the connection (1006)"})
+
+		if reason := m.(tui.Model).Reason(); !strings.Contains(reason, "1006") {
+			t.Errorf("Reason() = %q, want the disconnect reason", reason)
+		}
+	})
+
+	t.Run("room expired", func(t *testing.T) {
+		session := newFakeSession(info())
+		m, pumpCmd := connected(t, session, false)
+
+		m, _ = pump(t, m, pumpCmd, session, relay.Event{Kind: relay.EventRoomExpired})
+
+		if reason := m.(tui.Model).Reason(); !strings.Contains(reason, "expired") {
+			t.Errorf("Reason() = %q, want the expiry reason", reason)
+		}
+	})
+
+	t.Run("a clean exit has nothing to say", func(t *testing.T) {
+		session := newFakeSession(info())
+		m, _ := connected(t, session, false)
+
+		m = typeText(m, "/quit")
+		m, cmd := enter(m)
+		run(cmd)
+
+		if reason := m.(tui.Model).Reason(); reason != "" {
+			t.Errorf("Reason() = %q, want empty", reason)
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+
+// lockedBuffer is an output the renderer writes from its own goroutine while the
+// test reads it. -race finds this without the mutex.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+func (l *lockedBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.String()
+}
+
+func waitForOutput(t *testing.T, out *lockedBuffer, want string) {
+	t.Helper()
+
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); {
+		if strings.Contains(out.String(), want) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %q in:\n%q", want, out.String())
 }

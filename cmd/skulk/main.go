@@ -140,7 +140,7 @@ func runTUI(endpoint, roomID string, joining, allowInsecure bool, stdin io.Reade
 		NewRoomID: wordlist.NewRoomID,
 	})
 
-	program := tea.NewProgram(model, tea.WithInput(stdin), tea.WithOutput(stdout))
+	program := tui.NewProgram(model, tea.WithInput(stdin), tea.WithOutput(stdout))
 
 	final, err := program.Run()
 	if err != nil {
@@ -152,6 +152,13 @@ func runTUI(endpoint, roomID string, joining, allowInsecure bool, stdin io.Reade
 	// and the mapping to spec §17's table happens here — nothing in the TUI calls
 	// os.Exit, which is also what keeps it testable.
 	if m, ok := final.(tui.Model); ok {
+		// The program runs full-screen, and leaving the alternate screen restores
+		// whatever the terminal held before skulk started — taking the last frame,
+		// and any explanation on it, with it. Anything the user still needs to read
+		// has to be printed here, after the restore.
+		if reason := m.Reason(); reason != "" {
+			fmt.Fprintf(stderr, "skulk: %s\n", reason)
+		}
 		return m.Outcome().ExitCode()
 	}
 	return headless.ExitOK
