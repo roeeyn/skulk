@@ -1,9 +1,11 @@
 name: CI
 
 # The fast loop: relay tests, client tests, the integration lane, and §22.3's
-# dependency checks, on every push to main and every PR. Cross-platform build
-# matrix and release artifacts are M1.5 (ROJ-52, ROJ-53) and not here yet.
-# Target: under 5 minutes — the four jobs above run in parallel.
+# dependency checks, on every push to main and every PR. Also builds the relay
+# image and checks it answers, because a Dockerfile nobody builds is a document
+# rather than a deliverable. Cross-platform client builds and release artifacts
+# are M1.5 (ROJ-52, ROJ-53) and not here yet.
+# Target: under 5 minutes — every job runs in parallel except integration.
 on:
   push:
     branches: [main]
@@ -186,6 +188,53 @@ jobs:
       - name: mix licenses.check
         working-directory: skulkd
         run: mix licenses.check
+
+  # ---------------------------------------------------------------------------
+  # §24's Dockerfile, built and run on every PR.
+  #
+  # It is here rather than with the publishing workflow (ROJ-53) because the ways
+  # this breaks are silent: a dependency that needs a build tool the runtime image
+  # does not have, a base image that moved, a release that starts and then exits.
+  # None of them show up in `mix test`, and all of them show up at the worst
+  # possible moment if the first build is the one that publishes a tag.
+  #
+  # /healthz is the whole assertion. It proves the release booted, Bandit is
+  # listening on the configured address, and the plug pipeline answers — which is
+  # everything the image is responsible for. What runs BEHIND that endpoint is the
+  # relay and integration suites' job, not this one's.
+  image:
+    name: image · the relay builds and answers
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: docker build
+        run: docker build -t skulkd:ci .
+
+      - name: The image boots and /healthz answers
+        run: |
+          docker run -d --name skulkd-ci -p 4000:4000 skulkd:ci
+          for _ in $(seq 1 30); do
+            if curl -fsS --max-time 2 http://127.0.0.1:4000/healthz; then
+              echo
+              echo "relay answered"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::the image never answered /healthz within 30s"
+          docker logs skulkd-ci
+          exit 1
+
+      # The image runs as an unprivileged user (§20: nothing is written to disk,
+      # so nothing needs root). Asserted rather than assumed, because a base image
+      # change that dropped the USER line would go unnoticed otherwise.
+      - name: It is not running as root
+        run: |
+          user="$(docker exec skulkd-ci id -un)"
+          echo "running as: $user"
+          [ "$user" = "skulkd" ] || { echo "::error::expected user skulkd, got $user"; exit 1; }
 
   # ---------------------------------------------------------------------------
   # ExUnit drives everything (design A14): the relay boots in-process and real
