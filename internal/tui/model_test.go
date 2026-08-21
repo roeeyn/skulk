@@ -40,9 +40,10 @@ type fakeSession struct {
 
 	// bubbletea runs Cmds on their own goroutines, so anything a Cmd touches and a
 	// test reads needs a lock. Found by -race, which is why CI runs it.
-	mu     sync.Mutex
-	sent   []string
-	closed bool
+	mu      sync.Mutex
+	sent    []string
+	created string
+	closed  bool
 }
 
 func newFakeSession(info *relay.Info) *fakeSession {
@@ -53,8 +54,17 @@ func (f *fakeSession) Create(_ context.Context, roomID, _ string) (*relay.Info, 
 	if f.createErr != nil {
 		return nil, f.createErr
 	}
+	f.mu.Lock()
+	f.created = roomID
+	f.mu.Unlock()
 	f.info.RoomID = roomID
 	return f.info, nil
+}
+
+func (f *fakeSession) createdRoom() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.created
 }
 
 func (f *fakeSession) Join(_ context.Context, roomID, _ string) (*relay.Info, error) {
@@ -324,7 +334,7 @@ func TestSupportedCommands(t *testing.T) {
 		view := m.View()
 		// PgUp/PgDn is in here because /help is currently the only place a user can
 		// find out the transcript scrolls at all. ROJ-47 gives it a better home.
-		for _, want := range []string{"/help", "/who", "/quit", "PgUp", "not end-to-end encrypted"} {
+		for _, want := range []string{"/help", "/who", "/room", "/quit", "PgUp", "not end-to-end encrypted"} {
 			if !strings.Contains(view, want) {
 				t.Errorf("/help is missing %q:\n%s", want, view)
 			}
@@ -718,8 +728,10 @@ func TestInputStaysOnScreenWhenMessagesWrap(t *testing.T) {
 	if len(lines) > 12 {
 		t.Errorf("rendered %d rows into a 12-row terminal", len(lines))
 	}
-	if !strings.Contains(lines[len(lines)-1], ">") {
-		t.Errorf("the input prompt was pushed off screen; last row is %q", lines[len(lines)-1])
+	// ROJ-49 put the input in a box, so the prompt is the middle of the last three
+	// rows rather than the last one. Still the same property: it survives.
+	if !strings.Contains(inputRow(t, m), ">") {
+		t.Errorf("the input prompt was pushed off screen; last rows are %q", lines[len(lines)-3:])
 	}
 }
 
@@ -989,17 +1001,18 @@ func TestAModelNeverToldTheTerminalSizeStillRenders(t *testing.T) {
 	if !strings.Contains(m.View(), "Joined as quiet-otter-42") {
 		t.Errorf("the transcript is empty at the default size:\n%s", m.View())
 	}
-	if !strings.Contains(lines[len(lines)-1], ">") {
-		t.Errorf("the input prompt is missing; last row is %q", lines[len(lines)-1])
+	if !strings.Contains(inputRow(t, m), ">") {
+		t.Errorf("the input prompt is missing; last rows are %q", lines[len(lines)-3:])
 	}
 }
 
 // A full-screen app owns exactly the rows it was given. One row too many and the
 // terminal scrolls, which in alt-screen mode looks like the app tearing itself.
 func TestTheChatFrameIsExactlyTheTerminalHeight(t *testing.T) {
-	// Below five rows there is nowhere to put a status bar, a transcript and an
-	// input line, so the frame keeps its minimum and the terminal is on its own.
-	for _, size := range [][2]int{{80, 24}, {40, 10}, {120, 60}, {80, 6}, {100, 5}} {
+	// Below six rows there is nowhere to put a status bar, a transcript and a
+	// three-row input box, so the frame keeps its minimum and the terminal is on
+	// its own. That floor moved from five when ROJ-49 boxed the input.
+	for _, size := range [][2]int{{80, 24}, {40, 10}, {120, 60}, {80, 7}, {100, 6}} {
 		m, _, _ := filled(t, size[0], size[1], 30)
 
 		if lines := rendered(t, m); len(lines) != size[1] {
@@ -1181,4 +1194,189 @@ func waitForOutput(t *testing.T, out *lockedBuffer, want string) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %q in:\n%q", want, out.String())
+}
+
+// ---------------------------------------------------------------------------
+// ROJ-49 — feedback from the first real session.
+//
+// "I created and joined the room but then I have no idea what the room name was
+// so I couldn't share it with the other chat."
+//
+// The status bar had shown the room id all along. The actual defect was that the
+// room id and the password were never on screen at the same time: the password is
+// displayed once (§9.2), and the room id did not exist until connect() ran, a
+// screen later. There was no moment at which a complete invite existed.
+// ---------------------------------------------------------------------------
+
+// inputRow is the middle row of the bordered input box — the one with the prompt
+// in it. The box is the last three rows of the frame.
+func inputRow(t *testing.T, m tea.Model) string {
+	t.Helper()
+
+	lines := rendered(t, m)
+	if len(lines) < 3 {
+		t.Fatalf("frame is only %d rows:\n%s", len(lines), m.View())
+	}
+	return lines[len(lines)-2]
+}
+
+func TestTheDisplayOnceScreenIsACompleteInvite(t *testing.T) {
+	session := newFakeSession(info())
+	m := tea.Model(tui.New(config(session, false)))
+
+	m, _ = enter(m) // accept the suggested passphrase
+
+	view := m.View()
+	if !strings.Contains(view, suggested) {
+		t.Errorf("the password must be on the display-once screen:\n%s", view)
+	}
+	// The half that was missing. Half an invite is no invite.
+	if !strings.Contains(view, "amber-river-copper-moon-forest-glass-harbor-star") {
+		t.Errorf("the room id must be on the same screen as the password:\n%s", view)
+	}
+	if !strings.Contains(view, "shown once") {
+		t.Errorf("§9.2's display-once warning is missing:\n%s", view)
+	}
+}
+
+// The room id is generated before the password is displayed, not after — but it
+// must still be the id the room is actually created with.
+func TestTheRoomIsCreatedWithTheIDThatWasDisplayed(t *testing.T) {
+	session := newFakeSession(info())
+	m := tea.Model(tui.New(config(session, false)))
+
+	m, _ = enter(m)
+	displayed := m.View()
+
+	m, cmd := enter(m)
+	m, _ = step(m, run(cmd))
+
+	if !strings.Contains(displayed, session.createdRoom()) {
+		t.Errorf("created room %q was not the one displayed:\n%s", session.createdRoom(), displayed)
+	}
+}
+
+func TestRoomCommandRecallsTheInvite(t *testing.T) {
+	session := newFakeSession(info())
+	m, _ := connected(t, session, true) // joining: no invite notice on connect
+
+	m = typeText(m, "/room")
+	m, _ = enter(m)
+
+	view := m.View()
+	if !strings.Contains(view, "amber-river-copper-moon-forest-glass-harbor-star") {
+		t.Errorf("/room must show the room id:\n%s", view)
+	}
+	// The id has to be on a line of its own: an eight-word id plus a relay URL is
+	// close to a hundred columns, and a command that wraps cannot be copied.
+	if !strings.Contains(view, "    amber-river-copper-moon-forest-glass-harbor-star") {
+		t.Errorf("the room id needs its own line to be selectable:\n%s", view)
+	}
+	if !strings.Contains(view, "skulk join") {
+		t.Errorf("/room must say how someone joins:\n%s", view)
+	}
+	// A room id alone is not something anyone can act on.
+	if !strings.Contains(view, "ws://127.0.0.1:4000/v1/ws") {
+		t.Errorf("the invite must name the relay:\n%s", view)
+	}
+}
+
+// §9.2: a generated password is displayed once. Re-showing it on demand would be
+// a spec amendment, not a convenience — so this asserts the negative.
+func TestRoomCommandNeverRepeatsThePassword(t *testing.T) {
+	session := newFakeSession(info())
+	m := tea.Model(tui.New(config(session, false)))
+
+	m, _ = enter(m) // accept the suggested passphrase
+	m, cmd := enter(m)
+	m, _ = step(m, run(cmd))
+
+	m = typeText(m, "/room")
+	m, _ = enter(m)
+
+	if view := m.View(); strings.Contains(view, suggested) {
+		t.Errorf("/room re-displayed the password, which §9.2 shows exactly once:\n%s", view)
+	}
+}
+
+// Recall-on-demand and show-at-the-right-moment are different failure modes: the
+// user lost the id seconds after seeing it, without knowing a command existed.
+func TestCreatingARoomLeavesTheInviteInTheTranscript(t *testing.T) {
+	session := newFakeSession(info())
+	m, _ := connected(t, session, false)
+
+	view := m.View()
+	if !strings.Contains(view, "    amber-river-copper-moon-forest-glass-harbor-star") {
+		t.Errorf("creating a room should leave the room id in the transcript:\n%s", view)
+	}
+	if !strings.Contains(view, "skulk join") {
+		t.Errorf("the transcript should say how someone joins:\n%s", view)
+	}
+
+	// Joining a room you were invited to does not need an invite of its own.
+	other := newFakeSession(info())
+	joined, _ := connected(t, other, true)
+
+	if view := joined.View(); strings.Contains(view, "skulk join") {
+		t.Errorf("the join flow should not print an invite:\n%s", view)
+	}
+}
+
+func TestThePromptCarriesTheAssignedUsername(t *testing.T) {
+	session := newFakeSession(info())
+	m := tea.Model(tui.New(config(session, false)))
+
+	// The relay assigns the username, so there is nothing to show before it does.
+	if view := m.View(); strings.Contains(view, "quiet-otter-42 >") {
+		t.Errorf("the password prompt cannot know a username yet:\n%s", view)
+	}
+
+	m, _ = enter(m)
+	m, cmd := enter(m)
+	m, _ = step(m, run(cmd))
+
+	if row := inputRow(t, m); !strings.Contains(row, "quiet-otter-42 >") {
+		t.Errorf("the prompt should carry the username, got %q", row)
+	}
+}
+
+func TestTheInputSitsInABorderedBox(t *testing.T) {
+	session := newFakeSession(info())
+	m, _ := connected(t, session, false)
+	m, _ = step(m, tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	lines := rendered(t, m)
+	top, middle, bottom := lines[len(lines)-3], lines[len(lines)-2], lines[len(lines)-1]
+
+	for _, row := range []struct{ line, corner string }{{top, "╭"}, {middle, "│"}, {bottom, "╰"}} {
+		if !strings.HasPrefix(row.line, row.corner) {
+			t.Errorf("expected a box row starting %q, got %q", row.corner, row.line)
+		}
+		if w := lipgloss.Width(row.line); w != 80 {
+			t.Errorf("box row is %d columns in an 80-column terminal: %q", w, row.line)
+		}
+	}
+	if !strings.Contains(middle, ">") {
+		t.Errorf("the prompt should be inside the box, got %q", middle)
+	}
+}
+
+// lipgloss wraps content to fit a width, so a prompt longer than a narrow box
+// would turn three rows into four and break the frame-height guarantee. The text
+// has to scroll instead.
+func TestANarrowTerminalScrollsTheInputRatherThanGrowingTheBox(t *testing.T) {
+	for _, size := range [][2]int{{120, 24}, {80, 24}, {40, 20}, {24, 12}, {20, 10}, {12, 8}} {
+		session := newFakeSession(info())
+		m, _ := connected(t, session, false)
+		m, _ = step(m, tea.WindowSizeMsg{Width: size[0], Height: size[1]})
+		m = typeText(m, "a message far longer than any of these terminals are wide")
+
+		lines := rendered(t, m)
+		if len(lines) != size[1] {
+			t.Errorf("%dx%d rendered %d rows — the box grew", size[0], size[1], len(lines))
+		}
+		if w, at := widest(lines); w > size[0] {
+			t.Errorf("at width %d a line is %d columns: %q", size[0], w, at)
+		}
+	}
 }
