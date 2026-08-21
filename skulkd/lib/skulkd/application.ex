@@ -25,9 +25,20 @@ defmodule Skulkd.Application do
   # claim a fixed one out from under them. config/test.exs sets server: false.
   defp server do
     if Application.get_env(:skulkd, :server, true) do
-      [{Bandit, plug: Skulkd.Router, port: Application.get_env(:skulkd, :port, 4000)}]
+      [{Bandit, [plug: Skulkd.Router, port: Application.get_env(:skulkd, :port, 4000)] ++ ip()}]
     else
       []
+    end
+  end
+
+  # Bandit binds every interface unless told otherwise, which is what a container
+  # wants. `SKULKD_BIND=127.0.0.1:4000` is what a relay behind a TLS reverse proxy
+  # wants — see Skulkd.Config. Absent rather than defaulted here, so Bandit's own
+  # default stays the one documented.
+  defp ip do
+    case Application.fetch_env(:skulkd, :ip) do
+      {:ok, ip} -> [ip: ip]
+      :error -> []
     end
   end
 end
