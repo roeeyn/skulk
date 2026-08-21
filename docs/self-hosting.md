@@ -217,6 +217,13 @@ Every setting is an environment variable, documented one by one with its default
 [`skulkd/skulkd.env.example`](../skulkd/skulkd.env.example) — copy that file rather than
 this table.
 
+Six of §8's eleven bounds are settings — the other two variables in that table come from
+§7.4 and §21. The remaining five §8 bounds have no variable on purpose: maximum message
+size and maximum frame size are compile-time halves of a contract the Go client holds the
+other half of, and the room-ID and password length limits are protocol validation rather
+than deployment policy. Changing either kind on one relay produces a relay that disagrees
+with every client. The end of `skulkd.env.example` says which is which, and why.
+
 | Variable | Default | What it bounds |
 | --- | --- | --- |
 | `SKULKD_BIND` | `0.0.0.0:4000` | address and port. `127.0.0.1:4000` to sit behind a proxy |
