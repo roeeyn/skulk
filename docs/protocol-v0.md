@@ -33,7 +33,8 @@ is guaranteed to survive a version bump; the envelope is.
 
 M1 (hardening) adds no frame types and no fields; it adds the `room_full` and
 `server_capacity` failure paths and stays on `v: 0`. `server_capacity` joined the
-registry in ROJ-39; the accounting that raises it is the rest of M1.
+registry in ROJ-39, and ROJ-40 built the accounting that raises it: spec §8's room,
+participant, and retained-history bounds.
 
 ### 1.1 What this document is not
 
@@ -184,8 +185,9 @@ atomically. Answered by `create.ok`, or `error` with:
 | Password outside `12`–`256` bytes | `invalid_message` (rule V13) |
 | Relay-side failure | `internal_error` |
 
-`room_full` and `server_capacity` are M1 additions on this path. The code exists as of
-ROJ-39; the capacity accounting that raises it lands with the rest of M1.
+`room_full` and `server_capacity` are M1 additions on this path. Both are live as of
+ROJ-40: `server_capacity` when the active-room cap is reached (spec §8, after expired
+rooms have been purged), and `room_full` when the room is at its participant cap.
 
 ### 5.2 `create.ok` (r→c)
 
@@ -409,7 +411,7 @@ is what its own notes instructed.
 | `room_already_exists` | `create.begin` collided with a live room. | no |
 | `authentication_failed` | Password verification failed. Deliberately generic. | no |
 | `room_expired` | The room expired before or during the operation. | yes |
-| `room_full` | Participant cap reached (M1). | no |
+| `room_full` | Participant cap reached (§8, default `32`). | no |
 | `message_too_large` | A frame or a `text` field exceeded a bound in §2.1 / §4. | frame-bound: yes; `text`-bound: no |
 | `invalid_message` | The frame or one of its fields is structurally invalid. | per rule (§7) |
 | `unsupported_protocol_version` | `v` is not `0`. | yes |
@@ -507,7 +509,8 @@ relay must be able to evaluate `chat.message` even though it never legitimately 
 
 Semantic outcomes (§4.1) depend on relay state and cannot be decided from bytes, so the
 corpus never asserts them. `room_not_found`, `room_already_exists`, `authentication_failed`,
-`room_expired`, `room_full`, and `internal_error` are covered by ROJ-31 and ROJ-32 tests.
+`room_expired` and `internal_error` are covered by ROJ-31 and ROJ-32 tests; `room_full`
+and `server_capacity` by ROJ-40's.
 
 ---
 

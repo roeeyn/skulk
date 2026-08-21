@@ -90,6 +90,34 @@ text or secrets — to stderr. The TUI owns the whole terminal, so redirect them
 $ ./bin/skulk create --server ws://localhost:4000/v1/ws --debug 2>skulk.log
 ```
 
+## Relay limits
+
+The relay is bounded, not rate limited. It will not throttle a busy room, but it will
+refuse to hold an unbounded number of rooms, participants, or messages — these are the
+defaults from the specification's §8, and every one of them is configurable:
+
+```elixir
+# skulkd/config/prod.exs
+config :skulkd,
+  room_ttl_ms: :timer.hours(120),            # idle rooms are deleted, not archived
+  max_rooms: 10_000,
+  max_members_per_room: 32,                  # the 33rd joiner gets `room_full`
+  max_history_messages: 1_000,               # per room — see the note below
+  max_history_bytes: 4 * 1024 * 1024,        # per room — see the note below
+  max_total_history_bytes: 512 * 1024 * 1024 # across every room
+```
+
+The two per-room history bounds are read but not yet acted on. They are enforced by
+evicting the oldest messages rather than by refusing new ones, and that eviction is the
+next piece of work; until it lands, a room's own history is bounded only by the global
+byte cap. The other four are live.
+
+Past a limit the relay answers `server_capacity`, which says nothing about *which* limit
+was reached — the numbers are not something an unauthenticated caller gets to map out.
+Expired rooms are purged before anything is refused, and a live room is never deleted to
+make space for a new one: running out of capacity never costs someone else their
+conversation.
+
 ## For scripts and AI agents
 
 `skulk --headless` speaks newline-delimited JSON on stdin and stdout instead of drawing a
