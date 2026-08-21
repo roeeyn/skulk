@@ -194,7 +194,17 @@ func (m Model) Outcome() Outcome { return m.outcome }
 // final frame with it. An explanation that only ever lived on screen would be
 // erased at exactly the moment the user needs to read it, so cmd/skulk prints
 // this to stderr after the program returns.
-func (m Model) Reason() string { return m.err }
+//
+// A successful exit has nothing to explain, and the check is against the outcome
+// rather than the field because err also holds prompt errors: aborting at a
+// password prompt that is showing one is the user reading it and choosing to
+// leave, not a failure to report back at them.
+func (m Model) Reason() string {
+	if m.outcome == OutcomeOK {
+		return ""
+	}
+	return m.err
+}
 
 func (m *Model) maskInput() {
 	// Spec §9.2: password prompts never echo.
@@ -271,6 +281,13 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 		m.online = len(msg.info.Participants)
 		m.phase = phaseChat
 		m.unmaskInput()
+
+		// The prompt and the session share one err field, and a rejected password is
+		// stale the moment a connection succeeds. Leaving it set makes it the final
+		// frame in place of the transcript, and Reason() prints it to stderr after a
+		// clean exit. The real failure path overwrites this field anyway, so nothing
+		// worth keeping is lost.
+		m.err = ""
 
 		m.note(fmt.Sprintf("Joined as %s", m.username))
 		if n := len(msg.info.History); n > 0 {

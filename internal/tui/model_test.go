@@ -1093,6 +1093,61 @@ func TestFatalOutcomesCarryAReasonOutOfTheAltScreen(t *testing.T) {
 			t.Errorf("Reason() = %q, want empty", reason)
 		}
 	})
+
+	// The prompt shares one err field with the session, and getting a password
+	// wrong before getting it right left the rejection sitting in it. Nothing saw
+	// that until Reason() started printing to stderr: a clean exit after a typo
+	// would exit 0 and complain about a password that was later accepted.
+	t.Run("a rejected password does not outlive the prompt", func(t *testing.T) {
+		session := newFakeSession(info())
+		m := tea.Model(tui.New(config(session, true)))
+
+		m = typeText(m, "short")
+		m, _ = enter(m)
+		if !strings.Contains(m.View(), "at least") {
+			t.Fatalf("expected the password to be rejected:\n%s", m.View())
+		}
+
+		m = typeText(m, "correct-horse-battery")
+		m, cmd := enter(m)
+		m, _ = step(m, run(cmd))
+
+		if !strings.Contains(m.View(), "Joined as") {
+			t.Fatalf("expected to be connected:\n%s", m.View())
+		}
+		if reason := m.(tui.Model).Reason(); reason != "" {
+			t.Errorf("a password error survived a successful connection: %q", reason)
+		}
+
+		// It must not be the final frame either: phaseDone renders err in place of
+		// the transcript, so a stale one replaces the whole session.
+		m = typeText(m, "/quit")
+		m, cmd = enter(m)
+		run(cmd)
+
+		if view := m.View(); strings.Contains(view, "at least") {
+			t.Errorf("a stale password error replaced the final frame:\n%s", view)
+		}
+	})
+
+	// Aborting at a prompt with an error on screen is not a failure: the user read
+	// it and chose to leave. Reason() is why the session ENDED, and Ctrl+C is.
+	t.Run("aborting at a prompt is not a reason", func(t *testing.T) {
+		session := newFakeSession(info())
+		m := tea.Model(tui.New(config(session, true)))
+
+		m = typeText(m, "short")
+		m, _ = enter(m)
+		m, cmd := step(m, tea.KeyMsg{Type: tea.KeyCtrlC})
+		run(cmd)
+
+		if code := m.(tui.Model).Outcome().ExitCode(); code != 0 {
+			t.Errorf("aborting at a prompt exited %d, want 0", code)
+		}
+		if reason := m.(tui.Model).Reason(); reason != "" {
+			t.Errorf("aborting at a prompt reported %q", reason)
+		}
+	})
 }
 
 // ---------------------------------------------------------------------------
