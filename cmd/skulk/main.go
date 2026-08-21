@@ -14,6 +14,8 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 
 	"github.com/roeeyn/skulk/internal/headless"
 	"github.com/roeeyn/skulk/internal/relay"
@@ -25,11 +27,12 @@ import (
 var Version = "0.0.0-dev"
 
 func main() {
-	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr, os.Getenv("SKULK_SERVER")))
+	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr,
+		os.Getenv("SKULK_SERVER"), os.Getenv("NO_COLOR")))
 }
 
 // run is main without the exit, so tests can drive the real argument handling.
-func run(args []string, stdin io.Reader, stdout, stderr io.Writer, serverEnv string) int {
+func run(args []string, stdin io.Reader, stdout, stderr io.Writer, serverEnv, noColorEnv string) int {
 	// Checked before flag parsing so the message explains the rule rather than
 	// just reporting an unknown flag. Amendment A15 and spec §20: a password on
 	// argv is visible in process listings and persists in shell history, so this
@@ -62,11 +65,17 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, serverEnv str
 		headlessMode  = fs.Bool("headless", false, "machine interface: newline-delimited JSON on stdin/stdout")
 		server        = fs.String("server", "", "relay WebSocket URL (or set SKULK_SERVER)")
 		allowInsecure = fs.Bool("allow-insecure", false, "permit ws:// to a non-loopback host")
+		noColor       = fs.Bool("no-color", false, "disable ANSI colors (spec §7.2)")
+		debug         = fs.Bool("debug", false, "diagnostic logging to stderr; never secrets or message text (§18.2)")
 	)
 
 	if err := fs.Parse(args); err != nil {
 		return headless.ExitUsage
 	}
+
+	// Before anything renders. lipgloss decides the profile from the output at
+	// first use, so forcing it has to happen ahead of the first Render call.
+	applyColorChoice(*noColor, noColorEnv)
 
 	if *showVersion {
 		fmt.Fprintln(stdout, "skulk", Version)
@@ -82,6 +91,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, serverEnv str
 		fmt.Fprintf(stderr, "skulk: %v\n", err)
 		return headless.ExitUsage
 	}
+
+	_ = debug
 
 	if *headlessMode {
 		runner := &headless.Runner{
@@ -162,6 +173,17 @@ func runTUI(endpoint, roomID string, joining, allowInsecure bool, stdin io.Reade
 		return m.Outcome().ExitCode()
 	}
 	return headless.ExitOK
+}
+
+// applyColorChoice honours spec §7.2's --no-color, and NO_COLOR alongside it.
+//
+// NO_COLOR is the de facto standard (no-color.org): what matters is that the
+// variable is PRESENT and non-empty, not what it is set to, so `NO_COLOR=0` also
+// disables colour. That reads wrong and is the specified behaviour.
+func applyColorChoice(noColor bool, noColorEnv string) {
+	if noColor || noColorEnv != "" {
+		lipgloss.SetColorProfile(termenv.Ascii)
+	}
 }
 
 // findForbiddenSecretFlag reports a secret-bearing flag if one was passed, in any
