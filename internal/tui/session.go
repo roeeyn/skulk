@@ -34,3 +34,13 @@ type Generator func() (string, error)
 func DialRelay(ctx context.Context, endpoint string) (Session, error) {
 	return relay.Dial(ctx, endpoint)
 }
+
+// DialRelayWith is DialRelay carrying session options — today the debug writer
+// that §7.2's --debug turns on. A Dialer takes only a context and an endpoint by
+// design (it is the seam the tests replace), so anything else has to arrive in a
+// closure rather than as another parameter.
+func DialRelayWith(opts relay.Options) Dialer {
+	return func(ctx context.Context, endpoint string) (Session, error) {
+		return relay.DialWithOptions(ctx, endpoint, opts)
+	}
+}
