@@ -20,6 +20,18 @@
 #
 # `--build-arg` overrides either, which is how ROJ-53 will rebuild on a base
 # image CVE without touching this file.
+#
+# WHY TRIXIE. Debian handed bookworm to the LTS team on 12 July 2026, three years
+# after its release — still patched until June 2028, but by a different team under
+# a narrower model. Starting a new image on a base that has just left regular
+# support means an upgrade inside the milestone that created it. Trixie is current
+# stable.
+#
+# WHY NOT ALPINE, which would roughly halve the 204 MB. Alpine means musl, and
+# argon2_elixir is a C NIF: argon2 is memory-hard BY DESIGN, so password hashing is
+# exactly the workload where musl's allocator is least suited to the BEAM. That is
+# the reason it was not reached for rather than a measured result — if image size
+# starts mattering for the pull, measure it rather than inheriting this sentence.
 ARG BUILDER_IMAGE=hexpm/elixir:1.18.3-erlang-27.3.4.3-debian-trixie-20250929-slim
 ARG RUNTIME_IMAGE=debian:trixie-20251229-slim
 
