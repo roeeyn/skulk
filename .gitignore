@@ -8,6 +8,9 @@ skulkd/*.ez
 skulkd/erl_crash.dump
 skulkd/.elixir_ls/
 
+# go-task fingerprint cache
+.task/
+
 # Go
 /skulk
 /bin/
