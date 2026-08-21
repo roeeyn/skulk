@@ -10,6 +10,10 @@ defmodule Skulkd.Application do
         # One room per GenServer, addressed by room id. The registry is what makes
         # room creation atomic (spec §21) — see Skulkd.Rooms.
         {Registry, keys: :unique, name: Skulkd.RoomRegistry},
+        # Ahead of the rooms: every room registers with the capacity counter as it
+        # starts (spec §8's global retained-history bound), so the counter has to
+        # already be there.
+        Skulkd.Capacity,
         {DynamicSupervisor, strategy: :one_for_one, name: Skulkd.RoomSupervisor}
       ] ++ server()
 

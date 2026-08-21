@@ -22,6 +22,16 @@ defmodule Skulkd.Fixtures do
 
   @doc "A password comfortably inside the 12..256 byte bounds."
   def password, do: "correct-horse-battery-staple"
+
+  @doc "A v4 UUID, the only spelling protocol §4 accepts for `message_id`."
+  def uuid do
+    <<a::48, _::4, b::12, _::2, c::62>> = :crypto.strong_rand_bytes(16)
+
+    <<g1::binary-8, g2::binary-4, g3::binary-4, g4::binary-4, g5::binary-12>> =
+      Base.encode16(<<a::48, 4::4, b::12, 2::2, c::62>>, case: :lower)
+
+    "#{g1}-#{g2}-#{g3}-#{g4}-#{g5}"
+  end
 end
 
 defmodule Skulkd.MemberStub do
