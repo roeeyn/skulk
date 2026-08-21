@@ -120,6 +120,19 @@ defmodule Skulkd.CapacityTest do
       assert_receive {:push, %{"type" => "room.expired"}}
     end
 
+    test "a live room asked to reap declines, and carries on" do
+      # The sweep only asks rooms whose cached deadline has passed, so this is the
+      # narrow case where that cache is wrong. §8 forbids evicting a non-expired
+      # room to make space, and this is the point at which it would go wrong: the
+      # room, not the sweep, is what decides.
+      {room_id, session} = create()
+      pid = Rooms.whereis(room_id)
+
+      assert GenServer.call(pid, :reap) == :ok
+      assert Process.alive?(pid)
+      assert {:ok, _} = chat(room_id, session.sender_id, "still talking")
+    end
+
     test "a live room is never evicted to admit another one (§8)" do
       max = headroom(2)
 
@@ -260,15 +273,64 @@ defmodule Skulkd.CapacityTest do
 
   # ---------------------------------------------------------------------------
   describe "AC5 · the counter settles exactly under concurrency (design A13)" do
+    test "concurrent reservers never push the counter past the cap" do
+      # The room-level race below proves the integration. This proves the mechanism,
+      # and it is the one that fails if reserve-then-undo becomes check-then-act.
+      #
+      # Two things make it sharp. Reserving is ALL these processes do — through a
+      # room, a reserve is a per-cent of the work in a GenServer round trip, and two
+      # rooms are almost never inside that window at the same instant. And a cap is
+      # crossed exactly ONCE per counter, which is the only moment two writers can
+      # both read a total with room to spare, so this holds sixty short races rather
+      # than one long one. Measured: check-then-act overshoots in 57 of 60 rounds
+      # here, and in roughly a third of runs of the room-level test.
+      reservers = 96
+      size = 64
+      slots = 400
+      limit = size * slots
+
+      for round <- 1..60 do
+        cap = capacity(limit)
+        test_pid = self()
+
+        tasks =
+          for _ <- 1..reservers do
+            Task.async(fn ->
+              send(test_pid, {:ready, self()})
+              assert_receive :go, 30_000
+
+              Enum.reduce(1..(div(slots, reservers) + 6), 0, fn _, held ->
+                case Capacity.reserve(cap, size) do
+                  :ok -> held + size
+                  {:error, :server_capacity} -> held
+                end
+              end)
+            end)
+          end
+
+        for _ <- tasks, do: assert_receive({:ready, _}, 30_000)
+        for task <- tasks, do: send(task.pid, :go)
+        accepted = tasks |> Task.await_many(30_000) |> Enum.sum()
+
+        assert Capacity.total(cap) <= limit, "round #{round} overshot the cap"
+        assert Capacity.total(cap) == accepted, "round #{round} leaked a reservation"
+      end
+    end
+
     @tag timeout: 120_000
     test "rooms appending concurrently never exceed the cap and leak no reservations" do
-      rooms = 24
-      per_room = 40
+      rooms = 32
+      per_room = 80
 
-      # Sized so the cap is crossed in the middle of the run: every sender is still
-      # hammering the counter while it sits at the boundary, which is exactly where
-      # check-then-act admits two writers at once.
-      limit = div(rooms * per_room * sample_size(), 2)
+      # Message sizes VARY, and that is the whole design of this test. With one
+      # fixed size the counter crosses the cap exactly once and every later attempt
+      # is refused — a single instant in which two writers can collide. With mixed
+      # sizes the counter instead *hovers* under the cap for the rest of the run:
+      # large messages bounce off it while small ones keep slipping in, so hundreds
+      # of accepts happen right at the boundary. That is where check-then-act lets
+      # two rooms both read a total with room to spare and both spend it.
+      sizes = for n <- 1..per_room, do: String.duplicate("x", rem(n * 97, 800) + 1)
+      limit = div(rooms * (per_room * sample_size() + Enum.sum(Enum.map(sizes, &byte_size/1))), 2)
       cap = capacity(limit)
 
       sessions =
@@ -287,8 +349,8 @@ defmodule Skulkd.CapacityTest do
             send(test_pid, {:ready, self()})
             assert_receive :go, 30_000
 
-            Enum.reduce(1..per_room, 0, fn n, total ->
-              case chat(room_id, sender_id, "message #{n}") do
+            Enum.reduce(sizes, 0, fn text, total ->
+              case chat(room_id, sender_id, text) do
                 {:ok, payload} -> total + encoded_size(payload)
                 {:error, :server_capacity} -> total
               end
@@ -308,7 +370,7 @@ defmodule Skulkd.CapacityTest do
 
       # A run where nothing was ever rejected would satisfy both assertions above
       # while testing nothing at all.
-      assert accepted < rooms * per_room * sample_size()
+      assert accepted < rooms * Enum.sum(Enum.map(sizes, &byte_size/1))
     end
   end
 
@@ -346,6 +408,27 @@ defmodule Skulkd.CapacityTest do
       assert_receive {:DOWN, ^ref, :process, ^pid, _}
 
       assert eventually(fn -> Capacity.total(cap) == 0 end)
+    end
+
+    test "a reaped room's bytes are freed before the purge returns" do
+      {clock, time} = fake_time()
+      cap = capacity(1_000_000)
+      {room_id, creator} = create(time ++ [capacity: cap])
+
+      {:ok, _} = chat(room_id, creator.sender_id, "hello")
+      assert Capacity.total(cap) > 0
+      Clock.Fake.advance(clock, @ttl + 1)
+
+      # Suspended, so the monitor in Skulkd.Capacity cannot be what frees these
+      # bytes. What is left is the room's own release on the way out, ordered before
+      # its final reply — which is the ordering the retry in Skulkd.Room.send_chat/5
+      # depends on. Without it that retry races a mailbox and passes on luck.
+      :sys.suspend(cap)
+
+      assert Rooms.purge_expired(clock: Clock.Fake.fun(clock)) >= 1
+      assert Capacity.total(cap) == 0
+
+      :sys.resume(cap)
     end
 
     test "bytes are returned even when the room is killed outright" do
