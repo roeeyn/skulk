@@ -50,7 +50,8 @@ defmodule Skulkd.Limits do
   @doc """
   Maximum retained messages per room (§8: `1,000`).
 
-  Enforced by eviction rather than rejection (§15) — ROJ-41.
+  Enforced by evicting the oldest message rather than by refusing the new one
+  (§15).
   """
   @spec max_history_messages() :: pos_integer()
   def max_history_messages, do: get(:max_history_messages)
@@ -58,7 +59,9 @@ defmodule Skulkd.Limits do
   @doc """
   Maximum retained encoded history per room (§8: `4 MiB`).
 
-  Enforced by eviction rather than rejection (§15) — ROJ-41.
+  Enforced by eviction (§15), except for one case that eviction cannot solve: a
+  single message whose encoded size exceeds this whole bound is refused with
+  `message_too_large` rather than emptying the room to make it fit.
   """
   @spec max_history_bytes() :: pos_integer()
   def max_history_bytes, do: get(:max_history_bytes)

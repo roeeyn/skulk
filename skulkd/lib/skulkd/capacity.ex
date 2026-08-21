@@ -87,6 +87,23 @@ defmodule Skulkd.Capacity do
   end
 
   @doc """
+  Gives back `bytes` the calling room has stopped retaining — §15 eviction.
+
+  The two counters move in the opposite order to `reserve/2`, and for the same
+  reason: whichever way a crash splits the pair, the global total must be left too
+  HIGH rather than too low. Here that means the room's own row goes down first —
+  reversed, a room killed mid-release would have its still-large row handed back by
+  the monitor, and the global would drift below the truth and start admitting past
+  the cap.
+  """
+  @spec release(atom(), pos_integer()) :: :ok
+  def release(capacity, bytes) when is_integer(bytes) and bytes > 0 do
+    :ets.update_counter(capacity, self(), -bytes, {self(), 0})
+    :ets.update_counter(capacity, @total, -bytes, {@total, 0})
+    :ok
+  end
+
+  @doc """
   Gives back everything the calling room holds.
 
   A room calls this on its way out so that the release is ordered *before* its
@@ -95,7 +112,7 @@ defmodule Skulkd.Capacity do
   module finding nothing left is the normal case rather than a race.
   """
   @spec release_all(atom()) :: :ok
-  def release_all(capacity), do: release(capacity, self())
+  def release_all(capacity), do: give_back_all(capacity, self())
 
   @doc """
   Registers the calling room for cleanup on death.
@@ -148,7 +165,7 @@ defmodule Skulkd.Capacity do
 
   @impl true
   def handle_info({:DOWN, _ref, :process, pid, _reason}, state) do
-    release(state.table, pid)
+    give_back_all(state.table, pid)
     {:noreply, state}
   end
 
@@ -156,7 +173,7 @@ defmodule Skulkd.Capacity do
 
   # --------------------------------------------------------------------------
 
-  defp release(capacity, pid) do
+  defp give_back_all(capacity, pid) do
     case :ets.take(capacity, pid) do
       [{^pid, bytes}] when bytes > 0 ->
         :ets.update_counter(capacity, @total, -bytes, {@total, 0})

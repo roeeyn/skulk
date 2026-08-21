@@ -1,0 +1,56 @@
+{
+  "name": "join-ok-history-with-eviction-gap",
+  "description": "join.ok whose snapshot has been thinned by §15 eviction: sequences ascend but are not contiguous.",
+  "frame_type": "join.ok",
+  "direction": "r2c",
+  "receiver": "client",
+  "expect": {
+    "result": "accept"
+  },
+  "wire": {
+    "kind": "text",
+    "json": {
+      "v": 0,
+      "type": "join.ok",
+      "request_id": "c6e40b19-73f5-4a82-9d1c-5b807e2f4a63",
+      "payload": {
+        "room_id": "amber-river-copper-moon-forest-glass-harbor-star",
+        "sender_id": "Kd8vN2pQ7rT4xW9yZa3bLc",
+        "username": "bright-fox-17",
+        "expires_at": "2026-08-25T14:03:11.000Z",
+        "participants": [
+          {
+            "sender_id": "u3Bk9QzR2mXvLp7TnAeYwQ",
+            "username": "quiet-otter-42"
+          },
+          {
+            "sender_id": "Kd8vN2pQ7rT4xW9yZa3bLc",
+            "username": "bright-fox-17"
+          }
+        ],
+        "history": [
+          {
+            "room_id": "amber-river-copper-moon-forest-glass-harbor-star",
+            "message_id": "4f7b2c91-8d3e-4a05-b6f2-9c1e7a04d385",
+            "sender_id": "u3Bk9QzR2mXvLp7TnAeYwQ",
+            "sender_username": "quiet-otter-42",
+            "sequence": 7,
+            "received_at": "2026-08-20T14:11:02.140Z",
+            "text": "everything before this was evicted"
+          },
+          {
+            "room_id": "amber-river-copper-moon-forest-glass-harbor-star",
+            "message_id": "b2085d3f-6a17-4c94-8e05-3f7d1b6a940c",
+            "sender_id": "Kd8vN2pQ7rT4xW9yZa3bLc",
+            "sender_username": "bright-fox-17",
+            "sequence": 9,
+            "received_at": "2026-08-20T14:11:47.663Z",
+            "text": "and sequence 8 went with them"
+          }
+        ],
+        "snapshot_sequence": 9
+      }
+    }
+  },
+  "notes": "Rule V13 requires history to be sequence-ASCENDING and says so instead of contiguous, because §15 eviction leaves gaps. This vector carries both kinds a codec could wrongly reject: the snapshot starts above 1, and it skips 8 in the middle. Eviction alone only produces the first, but a codec that 'tightened' the rule to contiguity would pass every other vector in this corpus and fail here, which is the point of it. snapshot_sequence is the last RETAINED sequence, not the count of messages the room ever accepted."
+}

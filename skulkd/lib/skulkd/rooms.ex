@@ -178,7 +178,16 @@ defmodule Skulkd.Rooms do
       [
         room_id: room_id,
         password_hash: Argon2.hash_pwd_salt(password)
-      ] ++ Keyword.take(opts, [:ttl_ms, :clock, :timer, :capacity, :max_members])
+      ] ++
+        Keyword.take(opts, [
+          :ttl_ms,
+          :clock,
+          :timer,
+          :capacity,
+          :max_members,
+          :max_history_messages,
+          :max_history_bytes
+        ])
     }
 
     case DynamicSupervisor.start_child(@supervisor, child) do

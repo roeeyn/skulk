@@ -50,8 +50,18 @@ defmodule Skulkd.Room do
       :expires_at,
       :capacity,
       :max_members,
+      :max_history_messages,
+      :max_history_bytes,
       participants: %{},
-      history: [],
+      # Spec §15 appends at one end and evicts from the other, which is the one
+      # access pattern a list cannot serve without walking it on every message.
+      # `:queue` is O(1) at both, and `:queue.to_list/1` comes out oldest-first —
+      # exactly the order a snapshot needs. Entries are `{payload, encoded_size}`:
+      # eviction has to know what each message costs, and re-encoding to find out
+      # would be both wasteful and a chance to disagree with what was charged.
+      history: :queue.new(),
+      history_count: 0,
+      history_bytes: 0,
       next_sequence: 1
     ]
   end
@@ -161,7 +171,10 @@ defmodule Skulkd.Room do
       timer: Keyword.get(opts, :timer, Skulkd.Timer.System),
       expires_at: DateTime.add(clock.(), ttl_ms, :millisecond),
       capacity: capacity,
-      max_members: Keyword.get_lazy(opts, :max_members, &Limits.max_members_per_room/0)
+      max_members: Keyword.get_lazy(opts, :max_members, &Limits.max_members_per_room/0),
+      max_history_messages:
+        Keyword.get_lazy(opts, :max_history_messages, &Limits.max_history_messages/0),
+      max_history_bytes: Keyword.get_lazy(opts, :max_history_bytes, &Limits.max_history_bytes/0)
     }
 
     # Before a single byte is reserved, so that a room which dies early still has
@@ -212,30 +225,9 @@ defmodule Skulkd.Room do
           "text" => text
         }
 
-        # Spec §8's global retained-history bound. Reserved before anything in the
-        # room changes, so a refusal costs nothing: no sequence consumed, no TTL
-        # refreshed, nothing broadcast, nothing stored. Amendment A8's captured
-        # `sender_username` is inside `payload` and is therefore accounted for — it
-        # is retained, so it is charged.
-        case Capacity.reserve(state.capacity, encoded_size(payload)) do
-          {:error, :server_capacity} ->
-            {:reply, {:error, :server_capacity}, state}
-
-          :ok ->
-            state =
-              %{
-                state
-                | history: [payload | state.history],
-                  next_sequence: state.next_sequence + 1,
-                  # Spec §14: only a stored chat message refreshes the deadline.
-                  # Joins, leaves, /who, and ping/pong deliberately do not.
-                  expires_at: DateTime.add(state.clock.(), state.ttl_ms, :millisecond)
-              }
-              |> publish_deadline()
-
-            broadcast(state, Frames.chat_message(payload))
-            {:reply, {:ok, payload}, state}
-        end
+        # Amendment A8's captured `sender_username` is inside `payload`, so it is
+        # charged: what is retained is what is accounted for.
+        store(state, payload, encoded_size(payload))
     end
   end
 
@@ -259,6 +251,96 @@ defmodule Skulkd.Room do
 
   defp handle_live_call({:leave, sender_id}, _from, state) do
     {:reply, :ok, remove(state, sender_id)}
+  end
+
+  # The order here is the whole of §8-meets-§15, and it is easy to get wrong.
+  #
+  # A room at its per-room cap makes room for each new message by evicting an old
+  # one, so the append is close to free globally. Reserving the message's full size
+  # before evicting would refuse it whenever the global counter is full — and refuse
+  # it for the next 120 hours, because nothing about the room changes until its TTL
+  # runs out. 128 rooms sitting at a 4 MiB per-room cap fill the 512 MiB global one,
+  # so that is the steady state under load rather than a corner of it. §8 says chat
+  # fails if accepting the message "would exceed" the global limit, and accepting it
+  # includes the eviction §15 requires.
+  #
+  # So the eviction is planned first, without committing it, and only the NET change
+  # is put to the counter. Planning rather than doing matters: if the counter refuses,
+  # nothing has been evicted, and a message that could not be stored has not cost
+  # anyone the history they already had.
+  defp store(state, payload, size) do
+    if size > state.max_history_bytes do
+      # §15: refuse it rather than empty the room to fit it. No eviction, no
+      # sequence consumed, no TTL refreshed, nothing broadcast.
+      {:reply, {:error, :message_too_large}, state}
+    else
+      {kept, dropped, freed} = plan_eviction(state, size)
+      delta = size - freed
+
+      case reserve(state.capacity, delta) do
+        {:error, :server_capacity} ->
+          {:reply, {:error, :server_capacity}, state}
+
+        :ok ->
+          state =
+            %{
+              state
+              | history: :queue.in({payload, size}, kept),
+                history_count: state.history_count - dropped + 1,
+                history_bytes: state.history_bytes - freed + size,
+                next_sequence: state.next_sequence + 1,
+                # Spec §14: only a stored chat message refreshes the deadline.
+                # Joins, leaves, /who, and ping/pong deliberately do not.
+                expires_at: DateTime.add(state.clock.(), state.ttl_ms, :millisecond)
+            }
+            |> publish_deadline()
+
+          # Reserve before the commit, release after it, so that every transient
+          # leaves the counter reading HIGH rather than low — refusing early is
+          # recoverable, admitting past the cap is not.
+          release(state.capacity, delta)
+
+          broadcast(state, Frames.chat_message(payload))
+          {:reply, {:ok, payload}, state}
+      end
+    end
+  end
+
+  defp reserve(capacity, delta) when delta > 0, do: Capacity.reserve(capacity, delta)
+  defp reserve(_capacity, _delta), do: :ok
+
+  defp release(capacity, delta) when delta < 0, do: Capacity.release(capacity, -delta)
+  defp release(_capacity, _delta), do: :ok
+
+  # Which of the oldest messages have to go for `incoming` to fit BOTH per-room
+  # caps (§15), without touching the room's state. Returns the history that would
+  # remain, and what dropping it would cost and free.
+  defp plan_eviction(state, incoming) do
+    evict(
+      state.history,
+      max(state.history_count + 1 - state.max_history_messages, 0),
+      state.history_bytes + incoming - state.max_history_bytes,
+      0,
+      0
+    )
+  end
+
+  defp evict(history, min_dropped, min_freed, dropped, freed)
+       when dropped >= min_dropped and freed >= min_freed do
+    {history, dropped, freed}
+  end
+
+  defp evict(history, min_dropped, min_freed, dropped, freed) do
+    case :queue.out(history) do
+      {{:value, {_payload, size}}, rest} ->
+        evict(rest, min_dropped, min_freed, dropped + 1, freed + size)
+
+      # Only reachable if a cap is configured at zero, which is not a room so much
+      # as a refusal to have one. Stopping here keeps that a bad configuration
+      # rather than a crashed room.
+      {:empty, history} ->
+        {history, dropped, freed}
+    end
   end
 
   defp admit_member(member_pid, state) do
@@ -376,16 +458,25 @@ defmodule Skulkd.Room do
   end
 
   defp session(state, sender_id, username) do
+    history = state.history |> :queue.to_list() |> Enum.map(&elem(&1, 0))
+
     %{
       room_id: state.room_id,
       sender_id: sender_id,
       username: username,
       expires_at: Clock.to_wire(state.expires_at),
       participants: roster(state),
-      history: Enum.reverse(state.history),
-      snapshot_sequence: state.next_sequence - 1
+      history: history,
+      snapshot_sequence: last_sequence(history)
     }
   end
+
+  # Decision D9 and rule V13: the boundary is the last RETAINED message's sequence,
+  # or 0 for an empty snapshot. Read off the history rather than derived from the
+  # sequence counter, because §15 eviction breaks the arithmetic that used to make
+  # those the same number.
+  defp last_sequence([]), do: 0
+  defp last_sequence(history), do: history |> List.last() |> Map.fetch!("sequence")
 
   defp roster(state) do
     state.participants
