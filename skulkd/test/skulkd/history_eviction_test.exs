@@ -76,6 +76,18 @@ defmodule Skulkd.HistoryEvictionTest do
     encoded_size(payload)
   end
 
+  defp retained_bytes(room_id) do
+    room_id |> snapshot() |> Map.fetch!(:history) |> Enum.map(&encoded_size/1) |> Enum.sum()
+  end
+
+  defp eventually(fun, attempts \\ 100) do
+    cond do
+      fun.() -> true
+      attempts == 0 -> false
+      true -> Process.sleep(10) && eventually(fun, attempts - 1)
+    end
+  end
+
   # ---------------------------------------------------------------------------
   describe "AC1 · the message-count cap (§8, §15)" do
     test "the message past the cap evicts the oldest, and the room holds exactly N" do
@@ -90,6 +102,26 @@ defmodule Skulkd.HistoryEvictionTest do
 
       {:ok, _} = chat(room_id, creator.sender_id, "m5")
       assert texts(room_id) == ~w(m3 m4 m5)
+    end
+
+    test "a room at its byte cap keeps holding as much as it is allowed to" do
+      # Over-eviction satisfies both caps exactly as well as correct eviction does,
+      # so a test that only checks the caps hold cannot tell the two apart. This
+      # pins the other side of it: the room is still full.
+      sample = sample_size()
+      cap = capacity(10_000_000)
+
+      {room_id, creator} =
+        create(
+          capacity: cap,
+          max_history_bytes: div(7 * sample, 2),
+          max_history_messages: 1_000
+        )
+
+      for n <- 1..10 do
+        assert {:ok, _} = chat(room_id, creator.sender_id, "sample")
+        assert length(texts(room_id)) == min(n, 3), "after #{n} messages"
+      end
     end
 
     test "the newest message always survives its own eviction" do
@@ -184,16 +216,37 @@ defmodule Skulkd.HistoryEvictionTest do
       cap = capacity(10_000_000)
       {room_id, creator} = create(capacity: cap, max_history_messages: 3)
 
-      assert {:ok, first} = chat(room_id, creator.sender_id, "m1")
-      one = encoded_size(first)
+      # Large messages first, then small ones. The sizes have to CHANGE for this to
+      # test anything: with equal-sized messages every append nets to zero, so
+      # neither the reserve nor the release path is exercised at all.
+      for _ <- 1..3, do: {:ok, _} = chat(room_id, creator.sender_id, String.duplicate("x", 1_000))
+      peak = Capacity.total(cap)
 
-      for n <- 2..3, do: {:ok, _} = chat(room_id, creator.sender_id, "m#{n}")
-      assert Capacity.total(cap) == 3 * one
+      for n <- 1..3, do: {:ok, _} = chat(room_id, creator.sender_id, "tiny #{n}")
 
-      # Six more messages, none of them retained for long. Without releasing what
-      # it evicts, the relay leaks capacity until the room dies.
-      for n <- 4..9, do: {:ok, _} = chat(room_id, creator.sender_id, "m#{n}")
-      assert Capacity.total(cap) == 3 * one
+      # Without releasing what it evicts, the relay leaks capacity until the room
+      # dies — the counter would still be sitting at three kilobytes.
+      assert Capacity.total(cap) < peak
+      assert Capacity.total(cap) == retained_bytes(room_id)
+    end
+
+    test "a room that has evicted gives back exactly what it holds when it dies" do
+      # `Capacity.release/2` moves two counters: the room's own row and the global
+      # total. If the row is not brought down with it, the monitor hands back more
+      # than the room ever held, and the global drifts BELOW the truth — the one
+      # direction that admits past the cap.
+      cap = capacity(10_000_000)
+      {room_id, creator} = create(capacity: cap, max_history_messages: 2)
+
+      for _ <- 1..2, do: {:ok, _} = chat(room_id, creator.sender_id, String.duplicate("x", 1_000))
+      for n <- 1..3, do: {:ok, _} = chat(room_id, creator.sender_id, "tiny #{n}")
+
+      pid = Rooms.whereis(room_id)
+      ref = Process.monitor(pid)
+      Process.exit(pid, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^pid, :killed}
+
+      assert eventually(fn -> Capacity.total(cap) == 0 end)
     end
 
     test "an append that evicts as much as it adds succeeds with the counter at its cap" do

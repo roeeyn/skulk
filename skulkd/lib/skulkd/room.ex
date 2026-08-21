@@ -472,9 +472,13 @@ defmodule Skulkd.Room do
   end
 
   # Decision D9 and rule V13: the boundary is the last RETAINED message's sequence,
-  # or 0 for an empty snapshot. Read off the history rather than derived from the
-  # sequence counter, because §15 eviction breaks the arithmetic that used to make
-  # those the same number.
+  # or 0 for an empty snapshot.
+  #
+  # `next_sequence - 1` would still give the same answer, and a mutation pass says
+  # so — §15 evicts only from the front, so the newest message always survives and
+  # the last retained sequence is always the last accepted one. This reads it off
+  # the history anyway, because that is the invariant V13 actually checks, and
+  # stating it directly costs a list traversal a join already pays.
   defp last_sequence([]), do: 0
   defp last_sequence(history), do: history |> List.last() |> Map.fetch!("sequence")
 
