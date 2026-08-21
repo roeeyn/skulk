@@ -1,0 +1,18 @@
+{
+  "name": "duplicate-key-envelope",
+  "description": "Two `v` keys, the first valid and the second not. Go's encoding/json keeps the last and Elixir's Jason keeps the first, so before D13 this frame was accepted by one codec and rejected by the other.",
+  "frame_type": "ping",
+  "direction": "c2r",
+  "receiver": "relay",
+  "expect": {
+    "result": "reject",
+    "error_code": "invalid_message",
+    "rule": "V4",
+    "close": true
+  },
+  "wire": {
+    "kind": "text",
+    "raw": "{\"v\":0,\"v\":9,\"type\":\"ping\",\"request_id\":\"3f2a7c1e-9b4d-4e28-8a51-6c0d2e7f9b13\",\"payload\":{}}"
+  },
+  "notes": "Found by ROJ-44's differential fuzzing. The two codecs disagreed about which occurrence wins, which is request smuggling in miniature: the relay validates one value and the client reads another. D13 rejects rather than picking a winner."
+}

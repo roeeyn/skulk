@@ -20,7 +20,13 @@ defmodule Skulkd.MixProject do
   # binaries through Ports — a stale binary would test yesterday's client against
   # today's relay and pass.
   defp aliases do
-    ["test.integration": [&build_client/1, "test test/integration --include integration"]]
+    [
+      "test.integration": [
+        &build_client/1,
+        &build_oracle/1,
+        "test test/integration --include integration"
+      ]
+    ]
   end
 
   # CI builds the client itself and exports SKULK_BIN; locally we build on demand.
@@ -43,6 +49,33 @@ defmodule Skulkd.MixProject do
                stderr_to_stdout: true
              ) do
           {_output, 0} -> System.put_env("SKULK_BIN", target)
+          {output, code} -> Mix.raise("go build failed (#{code}):\n#{output}")
+        end
+    end
+  end
+
+  # ROJ-44's differential harness: the Go validator as a long-lived filter, so a
+  # property test can put generated frames through both codecs and compare. A test
+  # fixture rather than a shipped tool — see cmd/protocol-oracle.
+  defp build_oracle(_args) do
+    case System.get_env("SKULK_ORACLE_BIN") do
+      path when is_binary(path) and path != "" ->
+        if File.exists?(path) do
+          Mix.shell().info("protocol oracle: using SKULK_ORACLE_BIN at #{path}")
+        else
+          Mix.raise("SKULK_ORACLE_BIN is set to #{path}, but nothing is there")
+        end
+
+      _ ->
+        root = Path.expand("..", __DIR__)
+        target = Path.join([root, "bin", "protocol-oracle"])
+        Mix.shell().info("protocol oracle: building #{target}")
+
+        case System.cmd("go", ["build", "-o", target, "./cmd/protocol-oracle"],
+               cd: root,
+               stderr_to_stdout: true
+             ) do
+          {_output, 0} -> System.put_env("SKULK_ORACLE_BIN", target)
           {output, code} -> Mix.raise("go build failed (#{code}):\n#{output}")
         end
     end
