@@ -13,11 +13,16 @@ Mode: Builder
 > Constraints, Premises, Landscape, Cross-Model Perspective, Approaches Considered,
 > Decisions Pending, The Assignment, What I noticed. Background, not requirements.
 >
-> **Authority:** A0–A15 are folded into `terminal_chat_mvp_spec.md` as **spec v1.1**
-> before implementation begins (see Next Steps step 4 for the staging). The spec is
-> then the single authority an implementer follows. Per §27, `docs/deviations.md`
-> records only implementation-time deviations *from v1.1* — it is not a second home
-> for these amendments.
+> **Authority: `docs/spec/terminal_chat_mvp_spec.md` v1.1 is the implementation
+> source of truth.** A0, A3, A4, A5, A8, A10, A11, A12, A13, and A15 have been folded
+> into it (see its §28 changelog) and are **no longer requirements of this document** —
+> where the two differ on any of them, the spec wins and this file is history.
+>
+> A1, A2, A6, A7, A9, and A14 are not yet folded; they fold at the milestone where
+> their features land, and until then this document is where they live.
+>
+> Per §27, `docs/deviations.md` records only implementation-time deviations *from
+> v1.1* — it is not a second home for these amendments.
 
 ## Problem Statement
 
