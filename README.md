@@ -7,7 +7,7 @@ so do `bright-fox-17` and friends.
 
 > ## ⚠️ Not encrypted yet. Read this before using it.
 >
-> skulk is at milestone **M0**. Messages are **NOT end-to-end encrypted** — the relay
+> skulk is at milestone **M1**. Messages are **NOT end-to-end encrypted** — the relay
 > receives and stores your message text and can read every word of it. The room password
 > also reaches the relay, which hashes it. Transport is TLS and nothing more.
 >
@@ -15,6 +15,10 @@ so do `bright-fox-17` and friends.
 > then: **do not use skulk for anything you would mind a stranger reading.** It is
 > experimental, unaudited, and its own specification forbids describing it as private
 > until this notice can be deleted honestly.
+>
+> There is also **no rate limiting**, by design, so an internet-facing relay is open to
+> password guessing and floods. [**SECURITY.md**](SECURITY.md) is the threat model in full:
+> what is true today, what the relay is trusted for, and what only becomes true later.
 
 ---
 
@@ -172,6 +176,7 @@ decrypts, and the `message` event still carries plain `text`.
 | [`docs/headless-v1.md`](docs/headless-v1.md) | the machine interface |
 | [`docs/protocol/corpus/`](docs/protocol/corpus/) | golden frame vectors — the cross-language contract |
 | [`docs/designs/`](docs/designs/terminal-e2ee-chat.md) | the design doc and its full review trail |
+| [`SECURITY.md`](SECURITY.md) | threat model, known gaps, and how to report a vulnerability |
 
 ## Tests
 
@@ -195,8 +200,12 @@ identical error codes, or CI fails.
 M0 walking skeleton → M1 hardening → M2 OPAQUE auth → M3 E2EE → M4 integrity →
 M5 distribution.
 
-**M0 is complete.** The honesty notice at the top of this file is deleted when M3 ships and
-not one milestone sooner.
+**M0 and M1 are complete.** M1 added §8's capacity bounds, history eviction, backpressure,
+A12's username no-recycle, and the property and differential testing of frame decoding that
+[SECURITY.md](SECURITY.md) describes.
+
+The honesty notice at the top of this file is deleted when M3 ships and not one milestone
+sooner.
 
 ## License
 
