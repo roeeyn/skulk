@@ -176,6 +176,7 @@ type Model struct {
 
 	quitting  bool // a first Ctrl+C has been seen
 	following bool // the transcript is pinned to the live edge
+	unseen    int  // messages that arrived while it was not
 	err       string
 }
 
@@ -868,7 +869,33 @@ func (m Model) statusBar() string {
 		// On a very narrow terminal the word "online" is a luxury; the NUMBER is
 		// not, because "am I alone in here?" is what the bar exists to answer.
 		segment{text: fmt.Sprintf("%d online", m.online), shrink: dropTrailingWord},
+		// Rightmost, which is also where M4's continuity indicator goes. Empty
+		// when the whole transcript fits, so it costs nothing in a quiet room.
+		segment{text: m.scrollHint(), shrink: dropTrailingWord},
 	)
+}
+
+// scrollHint says whether there is more transcript than the screen is showing.
+//
+// Deliberately small: an arrow answers "is there more?", which is the question,
+// and a chat client that shouts about its scrollbar is worse than one with no
+// indicator at all. The exception is the count of messages that arrived while you
+// were reading back — that is the state where not knowing is the actual problem,
+// because it is the reason you would come back down.
+func (m Model) scrollHint() string {
+	above, below := !m.viewport.AtTop(), !m.viewport.AtBottom()
+
+	switch {
+	case below && m.unseen > 0:
+		return fmt.Sprintf("↓ %d new", m.unseen)
+	case above && below:
+		return "↑↓"
+	case above:
+		return "↑"
+	case below:
+		return "↓"
+	}
+	return ""
 }
 
 // segment is one piece of the status bar.
@@ -886,6 +913,17 @@ type segment struct {
 const segmentSeparator = "  ·  "
 
 func joinSegments(width int, segments ...segment) string {
+	// An empty segment costs nothing — not even its separator, which is five
+	// columns of nothing on a terminal that has none to spare. Dropped once, here,
+	// so that nothing downstream has to keep remembering to.
+	present := make([]segment, 0, len(segments))
+	for _, s := range segments {
+		if s.text != "" {
+			present = append(present, s)
+		}
+	}
+	segments = present
+
 	separator := lipgloss.Width(segmentSeparator)
 	rendered := make([]string, len(segments))
 
@@ -1011,6 +1049,7 @@ func (m *Model) syncViewport() {
 
 	if m.following {
 		m.viewport.GotoBottom()
+		m.unseen = 0
 		return
 	}
 
@@ -1046,6 +1085,12 @@ func (m *Model) invite() {
 }
 
 func (m *Model) appendMessage(message relay.Message) {
+	// Incremented unconditionally: syncViewport runs at the end of every Update
+	// and clears this whenever the view is following, so a count only survives
+	// while the reader is away. One mechanism rather than a guard here and a reset
+	// there, either of which could quietly cover for the other going wrong.
+	m.unseen++
+
 	m.entries = append(m.entries, entry{
 		at:     receivedAt(message.ReceivedAt),
 		sender: message.SenderUsername,
