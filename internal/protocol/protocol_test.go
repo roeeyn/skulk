@@ -346,8 +346,8 @@ func TestCorpusIntegrity(t *testing.T) {
 		if len(c.invalid) < 10 {
 			t.Errorf("corpus has %d invalid vectors, ticket requires at least 10", len(c.invalid))
 		}
-		if len(c.registry.ErrorCodes) != 10 {
-			t.Errorf("registry lists %d error codes, protocol v0 defines exactly 10", len(c.registry.ErrorCodes))
+		if len(c.registry.ErrorCodes) != 11 {
+			t.Errorf("registry lists %d error codes, protocol v0 defines exactly 11", len(c.registry.ErrorCodes))
 		}
 		if len(c.registry.FrameTypes) != 13 {
 			t.Errorf("registry lists %d frame types, protocol v0 defines exactly 13", len(c.registry.FrameTypes))

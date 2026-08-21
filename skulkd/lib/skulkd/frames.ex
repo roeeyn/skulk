@@ -101,6 +101,9 @@ defmodule Skulkd.Frames do
   defp message(:authentication_failed), do: "authentication failed"
   defp message(:room_expired), do: "room expired"
   defp message(:room_full), do: "room is full"
+  # Deliberately says nothing about WHICH limit was hit: §8 and spec §17/§18 keep
+  # capacity numbers out of a frame any unauthenticated caller can provoke.
+  defp message(:server_capacity), do: "at capacity"
   defp message(:message_too_large), do: "message too large"
   defp message(:invalid_message), do: "invalid message"
   defp message(:unsupported_protocol_version), do: "unsupported protocol version"

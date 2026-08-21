@@ -32,7 +32,8 @@ is guaranteed to survive a version bump; the envelope is.
 | M3 | `3` | `chat.send` / `chat.message` carry `nonce` + `ciphertext` instead of `text`. |
 
 M1 (hardening) adds no frame types and no fields; it adds the `room_full` and
-`server_capacity` failure paths and stays on `v: 0`.
+`server_capacity` failure paths and stays on `v: 0`. `server_capacity` joined the
+registry in ROJ-39; the accounting that raises it is the rest of M1.
 
 ### 1.1 What this document is not
 
@@ -183,7 +184,8 @@ atomically. Answered by `create.ok`, or `error` with:
 | Password outside `12`–`256` bytes | `invalid_message` (rule V13) |
 | Relay-side failure | `internal_error` |
 
-`room_full` and `server_capacity` are M1 additions on this path.
+`room_full` and `server_capacity` are M1 additions on this path. The code exists as of
+ROJ-39; the capacity accounting that raises it lands with the rest of M1.
 
 ### 5.2 `create.ok` (r→c)
 
@@ -396,8 +398,10 @@ that sends one commits a direction violation (rule V11).
 
 ## 6. Error codes
 
-The ten codes reachable in M0 (spec §17). `server_capacity` is defined by §17 but is not
-reachable until M1 adds capacity accounting, so it is **not** in the v0 registry.
+The eleven codes of spec §17. Ten were reachable at M0; `server_capacity` was deliberately
+left out of the registry until something could raise it, and ROJ-39 added it as M1's first
+change — the corpus vector that asserted its absence was deleted in the same commit, which
+is what its own notes instructed.
 
 | Code | Meaning | Close connection |
 | --- | --- | --- |
