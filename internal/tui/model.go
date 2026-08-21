@@ -675,19 +675,20 @@ func waitForEvent(events <-chan relay.Event) tea.Cmd {
 // --------------------------------------------------------------------------
 
 var (
-	statusStyle = lipgloss.NewStyle().Bold(true)
+	// A bar, not bold text. Reverse instead of a picked background colour: it
+	// swaps the terminal's own foreground and background, so it is legible on a
+	// light theme and a dark one without either being guessed at. vim and tmux
+	// draw their status lines the same way.
+	statusStyle = lipgloss.NewStyle().Bold(true).Reverse(true)
 	noticeStyle = lipgloss.NewStyle().Faint(true)
 
 	// The composing area as a region rather than a stray line. Box-drawing
 	// characters need no colour, so this renders the same on the ASCII profile.
 	inputBoxStyle = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1)
 
-	clockStyle = lipgloss.NewStyle()
+	// Timestamps recede: they are there when you look for them and not otherwise.
+	clockStyle = lipgloss.NewStyle().Faint(true)
 )
-
-// senderStyle is how a username is drawn. Colour arrives in a later commit; this
-// keeps the refactor a refactor.
-func senderStyle(string, bool) lipgloss.Style { return lipgloss.NewStyle() }
 
 func (m Model) View() string {
 	switch m.phase {
@@ -746,7 +747,9 @@ func (m Model) section(heading, prompt string) string {
 func (m Model) chatView() string {
 	var b strings.Builder
 
-	b.WriteString(statusStyle.Render(m.statusBar()))
+	// Padded to the full width so the bar is a bar across the whole row rather
+	// than an inverted patch the length of the text.
+	b.WriteString(statusStyle.Width(m.width).Render(m.statusBar()))
 	b.WriteString("\n\n")
 
 	// The viewport always renders exactly its own height, so the frame is exactly

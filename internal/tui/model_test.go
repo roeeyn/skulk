@@ -1399,3 +1399,29 @@ func TestPasswordPromptsSitInTheSameBox(t *testing.T) {
 		}
 	}
 }
+
+// Below about a dozen columns the bar stops being able to keep the participant
+// count, and that is fine. What is not fine is overflowing: a status bar wider
+// than the terminal wraps to a second row, and in a full-screen app that pushes
+// the entire frame down by one and the input box off the bottom.
+//
+// This exists because a mutation pass found the final truncate in joinSegments
+// was a backstop no test reached — the segment arithmetic fits on its own until
+// the terminal gets absurd, and then it does not.
+func TestTheStatusBarNeverOverflowsEvenAtAbsurdWidths(t *testing.T) {
+	session := newFakeSession(info())
+	m, _ := connected(t, session, false)
+
+	for _, width := range []int{12, 10, 8, 6, 4, 2, 1} {
+		m, _ = step(m, tea.WindowSizeMsg{Width: width, Height: 20})
+
+		lines := rendered(t, m)
+		if w := lipgloss.Width(lines[0]); w > width {
+			t.Errorf("status bar is %d columns in a %d-column terminal: %q", w, width, lines[0])
+		}
+		// A wrapped bar is a two-row bar, which is the same bug seen from the side.
+		if len(lines) != 20 {
+			t.Errorf("width %d: frame is %d rows, want 20 — something wrapped", width, len(lines))
+		}
+	}
+}
