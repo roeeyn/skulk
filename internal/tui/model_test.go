@@ -143,6 +143,21 @@ func config(session tui.Session, joining bool) tui.Config {
 
 func step(m tea.Model, msg tea.Msg) (tea.Model, tea.Cmd) { return m.Update(msg) }
 
+// clockAt converts a wire timestamp to the wall clock this machine would show.
+//
+// Tests that merely need to FIND a timestamp use this, because the alternative —
+// a hardcoded "14:07" — silently asserted UTC and so passed on CI's ubuntu
+// runners and failed on a developer's laptop. Correctness of the conversion is
+// not pinned here (this mirrors the production formatting and could not fail);
+// it is pinned in TestTimestampsRenderInLocalTime against a fixed zone.
+func clockAt(timestamp string) string {
+	at, err := time.Parse(time.RFC3339, timestamp)
+	if err != nil {
+		panic(err)
+	}
+	return at.Local().Format("15:04")
+}
+
 func typeText(m tea.Model, text string) tea.Model {
 	for _, r := range text {
 		m, _ = step(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
@@ -290,7 +305,7 @@ func TestJoinFlowRendersTheSessionSummary(t *testing.T) {
 	view := m.View()
 
 	// Spec §6.2's console transcript.
-	for _, want := range []string{"Joined as quiet-otter-42", "Loaded 2 retained messages.", "14:02", "bright-fox-17", "hey"} {
+	for _, want := range []string{"Joined as quiet-otter-42", "Loaded 2 retained messages.", clockAt("2026-08-20T14:02:10.000Z"), "bright-fox-17", "hey"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view is missing %q:\n%s", want, view)
 		}
@@ -418,7 +433,7 @@ func TestRelayEventsRender(t *testing.T) {
 	}
 
 	view := m.View()
-	for _, want := range []string{"bright-fox-17 joined.", "14:07", "does the relay see any of this?", "bright-fox-17 left."} {
+	for _, want := range []string{"bright-fox-17 joined.", clockAt("2026-08-20T14:07:52.418Z"), "does the relay see any of this?", "bright-fox-17 left."} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view is missing %q:\n%s", want, view)
 		}
@@ -651,7 +666,7 @@ func TestWrappedMessagesHangUnderTheirBody(t *testing.T) {
 	lines := rendered(t, m)
 	var first, second string
 	for i, line := range lines {
-		if strings.Contains(line, "14:07") {
+		if strings.Contains(line, clockAt("2026-08-20T14:07:52.418Z")) {
 			first = line
 			if i+1 < len(lines) {
 				second = lines[i+1]
@@ -1559,4 +1574,63 @@ func TestMouseReportingIsEnabled(t *testing.T) {
 
 func wheel(button tea.MouseButton) tea.MouseMsg {
 	return tea.MouseMsg{Action: tea.MouseActionPress, Button: button}
+}
+
+// ---------------------------------------------------------------------------
+// ROJ-48's slipped-in items, from the third test session.
+// ---------------------------------------------------------------------------
+
+// "The timezone should be the local time. Right now I'm seeing around 4:15, but
+// we should be seeing 22:25"
+//
+// The wire format is UTC by protocol D5 and the reader is not, so the conversion
+// has to happen at render. The zone is pinned rather than taken from the machine:
+// CI's runners are UTC and a developer's laptop is not, so an unpinned assertion
+// is green in one place and red in the other.
+func TestTimestampsRenderInLocalTime(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		zone *time.Location
+		wire string
+		want string
+	}{
+		{"UTC-6 is the reported case", time.FixedZone("CST", -6*60*60), "2026-08-21T04:15:00.000Z", "22:15"},
+		{"UTC+9 crosses forward", time.FixedZone("JST", 9*60*60), "2026-08-20T14:07:52.418Z", "23:07"},
+		{"UTC-6 crosses back over midnight", time.FixedZone("CST", -6*60*60), "2026-08-20T02:00:00.000Z", "20:00"},
+		{"UTC is left alone", time.UTC, "2026-08-20T14:07:52.418Z", "14:07"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			saved := time.Local
+			time.Local = tc.zone
+			t.Cleanup(func() { time.Local = saved })
+
+			session := newFakeSession(info())
+			m, pumpCmd := connected(t, session, false)
+			m, _ = pump(t, m, pumpCmd, session, relay.Event{Kind: relay.EventMessage, Message: relay.Message{
+				SenderUsername: "bright-fox-17", Sequence: 1, ReceivedAt: tc.wire, Text: "what time is it",
+			}})
+
+			if view := m.View(); !strings.Contains(view, tc.want) {
+				t.Errorf("wire %s in %s should show %s:\n%s", tc.wire, tc.zone, tc.want, view)
+			}
+		})
+	}
+}
+
+// A clock is cosmetic. A timestamp we cannot parse must not cost the message.
+func TestAnUnreadableTimestampStillShowsTheMessage(t *testing.T) {
+	session := newFakeSession(info())
+	m, pumpCmd := connected(t, session, false)
+
+	m, _ = pump(t, m, pumpCmd, session, relay.Event{Kind: relay.EventMessage, Message: relay.Message{
+		SenderUsername: "bright-fox-17", Sequence: 1, ReceivedAt: "not a timestamp", Text: "still readable",
+	}})
+
+	view := m.View()
+	if !strings.Contains(view, "still readable") {
+		t.Errorf("an odd timestamp swallowed the message:\n%s", view)
+	}
+	if !strings.Contains(view, "--:--") {
+		t.Errorf("expected a placeholder clock:\n%s", view)
+	}
 }
