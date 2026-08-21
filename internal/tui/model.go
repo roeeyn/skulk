@@ -145,6 +145,7 @@ type Config struct {
 	Dial      Dialer
 	Generate  Generator
 	NewRoomID Generator
+	Copy      Copier // nil disables /room's clipboard copy
 }
 
 // Model is the bubbletea model. Update and View are pure with respect to the
@@ -323,6 +324,8 @@ type eventsClosedMsg struct{}
 
 type sentMsg struct{ err error }
 
+type copiedMsg struct{ err error }
+
 type whoMsg struct {
 	participants []relay.Participant
 	err          error
@@ -426,6 +429,16 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 	case sentMsg:
 		if msg.err != nil {
 			m.note(fmt.Sprintf("Could not send: %v", msg.err))
+		}
+		return m, nil
+
+	case copiedMsg:
+		// Reported either way. A silent failure would leave the user believing they
+		// had the id, which is worse than not offering to copy it at all.
+		if msg.err != nil {
+			m.note(fmt.Sprintf("Could not copy to the clipboard: %v", msg.err))
+		} else {
+			m.note("Room id copied to the clipboard.")
 		}
 		return m, nil
 
@@ -591,7 +604,7 @@ func (m Model) submit(value string) (Model, tea.Cmd) {
 	case "/help":
 		m.note("/help — this message")
 		m.note("/who — who is in the room")
-		m.note("/room — the room id and a join command to share")
+		m.note("/room — the room id, copied to your clipboard, and how to share it")
 		m.note("/quit — leave and exit")
 		m.note("PgUp / PgDn or the mouse wheel — scroll back; sending returns you to the latest")
 		m.note("Selecting text needs shift-drag (option-drag on macOS) while the mouse is captured")
@@ -603,7 +616,7 @@ func (m Model) submit(value string) (Model, tea.Cmd) {
 		// §9.2 displays a generated password once. Saying so is the useful part:
 		// otherwise the absence reads as an oversight rather than a rule.
 		m.note("The password appeared once and is not shown again.")
-		return m, nil
+		return m, m.copyRoomID()
 
 	case "/who":
 		session := m.session
@@ -704,6 +717,25 @@ func (m Model) connect() (Model, tea.Cmd) {
 // leaving reports that the user has already asked to go, whether by /quit or by
 // Ctrl+C. Everything the relay says after that point is teardown noise.
 func (m Model) leaving() bool { return m.quitting || m.phase == phaseDone }
+
+// copyRoomID puts the room id on the clipboard.
+//
+// The id and nothing else: not the password, which §9.2 shows once and this
+// command deliberately never repeats, and not the whole join command, which is
+// mostly a relay URL the other person may not even need. The id is the part you
+// send someone.
+//
+// This exists because ROJ-47 captured the mouse for wheel scrolling, which takes
+// drag-selection away from the terminal — and inside a multiplexer the shift-drag
+// bypass does not always survive. ROJ-49 had just made the room id a line you
+// were meant to select.
+func (m Model) copyRoomID() tea.Cmd {
+	copyText, roomID := m.cfg.Copy, m.roomID
+	if copyText == nil {
+		return nil
+	}
+	return func() tea.Msg { return copiedMsg{err: copyText(roomID)} }
+}
 
 func (m Model) quit() tea.Cmd {
 	session := m.session

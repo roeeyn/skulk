@@ -190,8 +190,13 @@ func run(cmd tea.Cmd) tea.Msg {
 // the model a message — rather than reaching inside the package to construct one.
 func connected(t *testing.T, session *fakeSession, joining bool) (tea.Model, tea.Cmd) {
 	t.Helper()
+	return connectedWith(t, config(session, joining), joining)
+}
 
-	m := tea.Model(tui.New(config(session, joining)))
+func connectedWith(t *testing.T, cfg tui.Config, joining bool) (tea.Model, tea.Cmd) {
+	t.Helper()
+
+	m := tea.Model(tui.New(cfg))
 
 	var cmd tea.Cmd
 	if joining {
@@ -1632,5 +1637,100 @@ func TestAnUnreadableTimestampStillShowsTheMessage(t *testing.T) {
 	}
 	if !strings.Contains(view, "--:--") {
 		t.Errorf("expected a placeholder clock:\n%s", view)
+	}
+}
+
+// "I'm not able to copy anymore from the TUI … we need to solve the issue from
+// being able to copy the room name."
+//
+// ROJ-47 captured the mouse so the wheel would scroll, which takes drag-selection
+// away from the terminal — and inside zellij inside Ghostty the shift-drag bypass
+// does not get through. ROJ-49 had just made the room id a line to select.
+type fakeClipboard struct {
+	mu      sync.Mutex
+	written []string
+	err     error
+}
+
+func (c *fakeClipboard) write(text string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.err != nil {
+		return c.err
+	}
+	c.written = append(c.written, text)
+	return nil
+}
+
+func (c *fakeClipboard) contents() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.written...)
+}
+
+func TestRoomCommandCopiesTheRoomIDAndNothingElse(t *testing.T) {
+	session := newFakeSession(info())
+	board := &fakeClipboard{}
+	cfg := config(session, false)
+	cfg.Copy = board.write
+
+	m, _ := connectedWith(t, cfg, false)
+	m = typeText(m, "/room")
+	m, cmd := enter(m)
+	m, _ = step(m, run(cmd))
+
+	got := board.contents()
+	if len(got) != 1 {
+		t.Fatalf("clipboard writes = %d, want 1: %q", len(got), got)
+	}
+	// The id alone. Not the password §9.2 shows once, and not a join command that
+	// is mostly a relay URL — the id is the part you send someone.
+	if got[0] != "amber-river-copper-moon-forest-glass-harbor-star" {
+		t.Errorf("copied %q, want the bare room id", got[0])
+	}
+	if !strings.Contains(m.View(), "copied to the clipboard") {
+		t.Errorf("the copy should be acknowledged:\n%s", m.View())
+	}
+}
+
+// A silent failure leaves the user believing they have the id, which is worse
+// than never offering to copy it.
+func TestAFailedCopySaysSo(t *testing.T) {
+	session := newFakeSession(info())
+	board := &fakeClipboard{err: errors.New("no clipboard on this machine")}
+	cfg := config(session, false)
+	cfg.Copy = board.write
+
+	m, _ := connectedWith(t, cfg, false)
+	m = typeText(m, "/room")
+	m, cmd := enter(m)
+	m, _ = step(m, run(cmd))
+
+	view := m.View()
+	if !strings.Contains(view, "Could not copy") || !strings.Contains(view, "no clipboard") {
+		t.Errorf("a failed copy should say what went wrong:\n%s", view)
+	}
+	// And the id is still on screen, so there is still a way to get it.
+	if !strings.Contains(view, "    amber-river-copper-moon-forest-glass-harbor-star") {
+		t.Errorf("the id must still be readable when the copy fails:\n%s", view)
+	}
+}
+
+// The seam is optional: headless has no clipboard and neither does a test that
+// does not care.
+func TestRoomCommandWorksWithoutAClipboard(t *testing.T) {
+	session := newFakeSession(info())
+	cfg := config(session, false)
+	cfg.Copy = nil
+
+	m, _ := connectedWith(t, cfg, false)
+	m = typeText(m, "/room")
+	m, cmd := enter(m)
+	if cmd != nil {
+		run(cmd)
+	}
+
+	if !strings.Contains(m.View(), "amber-river-copper-moon-forest-glass-harbor-star") {
+		t.Errorf("/room should still show the id:\n%s", m.View())
 	}
 }

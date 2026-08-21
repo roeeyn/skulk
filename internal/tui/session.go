@@ -25,6 +25,14 @@ type Session interface {
 // ever resolving a URL.
 type Dialer func(ctx context.Context, endpoint string) (Session, error)
 
+// Copier puts text on the system clipboard.
+//
+// A seam for the same reason Dialer is one, and a sharper one: a test that
+// called the real clipboard would pass on a developer's Mac, fail on a headless
+// CI runner with nothing to talk to, and overwrite whatever the developer had
+// copied every single run.
+type Copier func(text string) error
+
 // Generator produces a suggested passphrase. The third seam, and the one the A5
 // create flow needs: "Enter accepts the generated passphrase" cannot be asserted
 // against a value the test does not know.

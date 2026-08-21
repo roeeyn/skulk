@@ -13,6 +13,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/atotto/clipboard"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
@@ -148,6 +149,10 @@ func runTUI(endpoint, roomID string, joining, allowInsecure, debug bool, stdin i
 		Dial:      tui.DialRelayWith(relay.Options{Debug: debugWriter(debug, stderr)}),
 		Generate:  wordlist.NewPassphrase,
 		NewRoomID: wordlist.NewRoomID,
+		// pbcopy and friends, rather than an OSC 52 escape sequence: the reported
+		// failure was a terminal multiplexer swallowing selection, and a subprocess
+		// talking to the OS does not care what sits between skulk and the terminal.
+		Copy: clipboard.WriteAll,
 	})
 
 	program := tui.NewProgram(model, tea.WithInput(stdin), tea.WithOutput(stdout))
