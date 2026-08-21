@@ -235,7 +235,24 @@ func New(cfg Config) Model {
 // here also leaves exactly one definition of what a skulk program is, which is
 // what lets a test run the real thing.
 func NewProgram(model Model, opts ...tea.ProgramOption) *tea.Program {
-	return tea.NewProgram(model, append([]tea.ProgramOption{tea.WithAltScreen()}, opts...)...)
+	defaults := []tea.ProgramOption{
+		tea.WithAltScreen(),
+
+		// The terminal reports when it gains and loses focus. bubbles' cursor
+		// already handles tea.FocusMsg and tea.BlurMsg on its own, so this single
+		// option is the whole fix for a cursor that blinks at you from a window
+		// you are not looking at. Terminals that do not support the mode simply
+		// never send the messages, and the cursor behaves as it did before.
+		tea.WithReportFocus(),
+
+		// Wheel scrolling. CellMotion is the narrowest mouse mode bubbletea v1
+		// exposes, and enabling any of them hands drag-selection to the program —
+		// which is in real tension with ROJ-49 putting the room id on a line
+		// meant to be copied. Terminals bypass it with shift-drag (option-drag on
+		// macOS), and /help says so.
+		tea.WithMouseCellMotion(),
+	}
+	return tea.NewProgram(model, append(defaults, opts...)...)
 }
 
 // Outcome reports how the session ended, for the caller's exit code.
@@ -324,6 +341,9 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
+
+	case tea.MouseMsg:
+		return m.handleMouse(msg)
 
 	case sessionReadyMsg:
 		m.session = msg.session
@@ -448,6 +468,31 @@ func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	return m, cmd
 }
 
+// handleMouse turns the wheel into transcript scrolling.
+//
+// Handled here rather than by forwarding to viewport.Update for the same reason
+// keys are (see handleKey): the viewport's own bindings would come along with it.
+// Three lines a notch is the usual terminal step and matches how much of a
+// message you can take in per flick.
+func (m Model) handleMouse(msg tea.MouseMsg) (Model, tea.Cmd) {
+	const notch = 3
+
+	switch msg.Button {
+	case tea.MouseButtonWheelUp:
+		m.viewport.ScrollUp(notch)
+	case tea.MouseButtonWheelDown:
+		m.viewport.ScrollDown(notch)
+	default:
+		return m, nil
+	}
+
+	// The same rule PgUp obeys: scrolling away from the live edge suspends
+	// auto-follow, and coming back resumes it. Without this a wheel-up would be
+	// yanked straight back by the next message, which is ROJ-46's whole point.
+	m.following = m.viewport.AtBottom()
+	return m, nil
+}
+
 func (m Model) handleEnter() (Model, tea.Cmd) {
 	value := m.input.Value()
 
@@ -533,7 +578,8 @@ func (m Model) submit(value string) (Model, tea.Cmd) {
 		m.note("/who — who is in the room")
 		m.note("/room — the room id and a join command to share")
 		m.note("/quit — leave and exit")
-		m.note("PgUp / PgDn — scroll back; sending a message returns you to the latest")
+		m.note("PgUp / PgDn or the mouse wheel — scroll back; sending returns you to the latest")
+		m.note("Selecting text needs shift-drag (option-drag on macOS) while the mouse is captured")
 		m.note("The relay can read every message. skulk is not end-to-end encrypted yet.")
 		return m, nil
 

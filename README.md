@@ -65,14 +65,25 @@ $ ./bin/skulk join amber-river-copper-moon-forest-glass-harbor-star \
 skulk takes over the terminal while it runs and gives it back on exit, the way `vim` does.
 Type to chat. `/help` lists the commands, `/who` shows who is here, `/room` shows the room
 id again when you need to invite someone, and `/quit` leaves — as does Ctrl+C. PgUp and
-PgDn scroll back through the transcript, and a message that arrives while you are reading
-waits at the bottom instead of yanking you down to it.
+PgDn — or the mouse wheel — scroll back through the transcript, and a message that arrives
+while you are reading waits at the bottom instead of yanking you down to it.
+
+skulk captures the mouse so the wheel works, which means selecting text needs **shift-drag**
+(option-drag on macOS). Names are coloured per person and your own is bold; `--no-color`
+turns all of it off, and so does setting `NO_COLOR`.
 
 The password is shown once, on the same screen as the room id, and never again — `/room`
 deliberately does not repeat it.
 
 > `ws://` is accepted here only because `localhost` is a loopback address. A remote relay
 > must be `wss://`, or skulk refuses to send your password over it.
+
+`--debug` writes protocol diagnostics — frame types, sizes, connection states, never message
+text or secrets — to stderr. The TUI owns the whole terminal, so redirect them:
+
+```console
+$ ./bin/skulk create --server ws://localhost:4000/v1/ws --debug 2>skulk.log
+```
 
 ## For scripts and AI agents
 

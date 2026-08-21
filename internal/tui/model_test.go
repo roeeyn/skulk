@@ -1425,3 +1425,138 @@ func TestTheStatusBarNeverOverflowsEvenAtAbsurdWidths(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// ROJ-47's two slipped-in items, from the second test session.
+// ---------------------------------------------------------------------------
+
+// "when the client is not active, it should stop the blinking cursor"
+//
+// The terminal has to be asked to report focus before it will, and bubbles'
+// cursor does the rest on its own. Both halves are tested: the escape sequence
+// that turns the mode on, and the model actually passing the messages through.
+func TestFocusReportingIsEnabledAndRestored(t *testing.T) {
+	session := newFakeSession(info())
+	out := &lockedBuffer{}
+
+	program := tui.NewProgram(tui.New(config(session, false)),
+		tea.WithInput(&bytes.Buffer{}), tea.WithOutput(out), tea.WithoutSignals())
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if _, err := program.Run(); err != nil {
+			t.Errorf("program failed: %v", err)
+		}
+	}()
+
+	program.Send(tea.WindowSizeMsg{Width: 100, Height: 30})
+	waitForOutput(t, out, "\x1b[?1004h") // focus reporting on
+
+	program.Send(tea.KeyMsg{Type: tea.KeyCtrlC})
+	<-done
+
+	if !strings.Contains(out.String(), "\x1b[?1004l") {
+		t.Error("focus reporting was left switched on after exit")
+	}
+}
+
+// The behavioural half. Blur and focus reach the cursor only by falling through
+// the model's type switch to the text input — so a future `case` added above the
+// fall-through would silently bring the blinking back. This is what notices that.
+func TestBlurStopsTheCursorAndFocusStartsItAgain(t *testing.T) {
+	session := newFakeSession(info())
+	m, _ := connected(t, session, false)
+
+	// A blink command is the cursor asking to be woken again later. Blur must not
+	// schedule one; focus must.
+	if _, cmd := step(m, tea.BlurMsg{}); cmd != nil {
+		t.Error("an unfocused terminal should not keep the cursor blinking")
+	}
+	m, _ = step(m, tea.BlurMsg{})
+	if _, cmd := step(m, tea.FocusMsg{}); cmd == nil {
+		t.Error("regaining focus should start the cursor blinking again")
+	}
+}
+
+// "I can't scroll with the mouse for the previous messages once they get out of
+// the screen"
+func TestTheMouseWheelScrollsTheTranscript(t *testing.T) {
+	m, pumpCmd, session := filled(t, 80, 14, 30)
+
+	if view := m.View(); !strings.Contains(view, marker(30)) {
+		t.Fatalf("expected to start at the live edge:\n%s", view)
+	}
+
+	// Up three notches: nine rows, most of a 10-row transcript.
+	for range 3 {
+		m, _ = step(m, wheel(tea.MouseButtonWheelUp))
+	}
+	if view := m.View(); strings.Contains(view, marker(30)) {
+		t.Errorf("the wheel did not scroll the transcript:\n%s", view)
+	}
+
+	// And it obeys ROJ-46's rule: scrolled away means not yanked back.
+	m, _ = pump(t, m, pumpCmd, session, relay.Event{Kind: relay.EventMessage, Message: relay.Message{
+		SenderUsername: "bright-fox-17", Sequence: 31,
+		ReceivedAt: "2026-08-20T14:09:00.000Z", Text: "arrived-mid-scroll",
+	}})
+	if view := m.View(); strings.Contains(view, "arrived-mid-scroll") {
+		t.Errorf("a new message yanked the wheel-scrolled view back:\n%s", view)
+	}
+
+	// Wheeling back to the bottom resumes following.
+	for range 5 {
+		m, _ = step(m, wheel(tea.MouseButtonWheelDown))
+	}
+	if view := m.View(); !strings.Contains(view, "arrived-mid-scroll") {
+		t.Errorf("wheeling down should reach the live edge:\n%s", view)
+	}
+
+	m, _ = pump(t, m, pumpCmd, session, relay.Event{Kind: relay.EventMessage, Message: relay.Message{
+		SenderUsername: "bright-fox-17", Sequence: 32,
+		ReceivedAt: "2026-08-20T14:09:30.000Z", Text: "following-once-more",
+	}})
+	if view := m.View(); !strings.Contains(view, "following-once-more") {
+		t.Errorf("returning to the bottom by wheel should resume auto-follow:\n%s", view)
+	}
+}
+
+// A click is not a scroll: buttons the transcript has no use for must not move it.
+func TestOtherMouseButtonsDoNotScroll(t *testing.T) {
+	m, _, _ := filled(t, 80, 14, 30)
+	before := m.View()
+
+	for _, button := range []tea.MouseButton{tea.MouseButtonLeft, tea.MouseButtonRight, tea.MouseButtonMiddle} {
+		m, _ = step(m, wheel(button))
+	}
+	if m.View() != before {
+		t.Errorf("a click moved the transcript:\nbefore:\n%s\nafter:\n%s", before, m.View())
+	}
+}
+
+func TestMouseReportingIsEnabled(t *testing.T) {
+	session := newFakeSession(info())
+	out := &lockedBuffer{}
+
+	program := tui.NewProgram(tui.New(config(session, false)),
+		tea.WithInput(&bytes.Buffer{}), tea.WithOutput(out), tea.WithoutSignals())
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if _, err := program.Run(); err != nil {
+			t.Errorf("program failed: %v", err)
+		}
+	}()
+
+	program.Send(tea.WindowSizeMsg{Width: 100, Height: 30})
+	waitForOutput(t, out, "\x1b[?1002h") // cell-motion mouse tracking
+
+	program.Send(tea.KeyMsg{Type: tea.KeyCtrlC})
+	<-done
+}
+
+func wheel(button tea.MouseButton) tea.MouseMsg {
+	return tea.MouseMsg{Action: tea.MouseActionPress, Button: button}
+}
