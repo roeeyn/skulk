@@ -113,7 +113,19 @@ for an "example environment/configuration file containing no secrets" and so alr
 anticipates environment variables.
 
 The flag names survive as the variable names (`--max-rooms` → `SKULKD_MAX_ROOMS`), so the
-two spellings stay one interface with two syntaxes rather than two interfaces.
+two spellings stay one interface with two syntaxes rather than two interfaces. Two of them
+do not survive intact, and both are named here rather than left to be discovered:
+
+- **`--room-ttl <DURATION>` becomes `SKULKD_ROOM_TTL_MS`.** A duration syntax is a small
+  language with its own bugs — `120h`, `5m`, `1h30m`, and the argument about what `1M`
+  means — for a value that is set once per deployment. Milliseconds, with the arithmetic
+  spelled out in a comment in the example file.
+- **`--max-message-bytes` has no variable at all.** That bound is `4096`, and it lives in
+  `Skulkd.Protocol` as a compile-time constant because it is half of a cross-language
+  contract: the Go client carries the same number and `docs/protocol/corpus/` fails CI if
+  the two disagree. Making it configurable on the relay alone would let a deployment drift
+  out of the corpus that proves the two implementations agree. It becomes configurable
+  when both sides can negotiate it, which is not this milestone.
 
 ### What it costs
 

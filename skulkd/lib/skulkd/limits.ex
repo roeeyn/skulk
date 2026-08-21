@@ -37,6 +37,16 @@ defmodule Skulkd.Limits do
     max_member_backlog: 500
   }
 
+  @doc """
+  Every bound and its default, as a map.
+
+  Public because `Skulkd.Config` is checked against it: a bound added here
+  without an environment variable there is a limit no deployment can change, and
+  a test fails rather than a deployer discovering it.
+  """
+  @spec defaults() :: %{atom() => pos_integer()}
+  def defaults, do: @defaults
+
   @doc "Room inactivity TTL (§8: `120h`). Only an accepted chat message refreshes it (§14)."
   @spec room_ttl_ms() :: pos_integer()
   def room_ttl_ms, do: get(:room_ttl_ms)
