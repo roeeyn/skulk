@@ -54,11 +54,20 @@ tasks:
       - ./{{.CLIENT}} create --server {{.SERVER}}
 
   join:
-    desc: Join an existing room — task join ROOM=<room-id>
+    desc: Join an existing room — task join -- <room-id>
     deps: [build]
     interactive: true
-    requires:
-      vars: [ROOM]
+    vars:
+      # Both spellings work: `task join -- <id>` reads better and is what the
+      # description advertises; `task join ROOM=<id>` is what you reach for if you
+      # are already passing PORT= on the same line.
+      ROOM: '{{.ROOM | default .CLI_ARGS}}'
+    preconditions:
+      # Not `requires: vars: [ROOM]` — the default above always defines ROOM, so
+      # `requires` sees it as set even when it is empty and hands the client a
+      # blank room id. This checks the value rather than the presence.
+      - sh: '[ -n "{{.ROOM}}" ]'
+        msg: "join needs a room id:  task join -- <room-id>"
     cmds:
       - ./{{.CLIENT}} join {{.ROOM}} --server {{.SERVER}}
 
