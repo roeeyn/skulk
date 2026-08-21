@@ -43,6 +43,17 @@ $ curl http://localhost:4000/healthz
 {"protocol_version":0,"status":"ok"}
 ```
 
+Or from the container image, if you would rather not install Elixir:
+
+```console
+$ docker build -t skulkd . && docker run --rm -p 4000:4000 skulkd
+```
+
+Either way this relay is local. Running one **that other people can reach** means TLS in
+front of it and a few decisions you should make deliberately —
+[**docs/self-hosting.md**](docs/self-hosting.md) covers those, including what a `wss://`
+deployment looks like and what it does not protect you from.
+
 ### 2. Build the client
 
 ```console
@@ -105,17 +116,21 @@ The relay is bounded, not rate limited. It will not throttle a busy room, but it
 refuse to hold an unbounded number of rooms, participants, or messages — these are the
 defaults from the specification's §8, and every one of them is configurable:
 
-```elixir
-# skulkd/config/prod.exs
-config :skulkd,
-  room_ttl_ms: :timer.hours(120),            # idle rooms are deleted, not archived
-  max_rooms: 10_000,
-  max_members_per_room: 32,                  # the 33rd joiner gets `room_full`
-  max_history_messages: 1_000,               # per room
-  max_history_bytes: 4 * 1024 * 1024,        # per room
-  max_total_history_bytes: 512 * 1024 * 1024, # across every room
-  max_member_backlog: 500                     # frames one client may fall behind
+```bash
+SKULKD_BIND=0.0.0.0:4000                  # 127.0.0.1:4000 to sit behind a TLS proxy
+SKULKD_ROOM_TTL_MS=432000000              # 120h — idle rooms are deleted, not archived
+SKULKD_MAX_ROOMS=10000
+SKULKD_MAX_MEMBERS_PER_ROOM=32            # the 33rd joiner gets `room_full`
+SKULKD_MAX_HISTORY_MESSAGES=1000          # per room
+SKULKD_MAX_HISTORY_BYTES=4194304          # 4 MiB, per room
+SKULKD_MAX_TOTAL_HISTORY_BYTES=536870912  # 512 MiB, across every room
+SKULKD_MAX_MEMBER_BACKLOG=500             # frames one client may fall behind
 ```
+
+[`skulkd/skulkd.env.example`](skulkd/skulkd.env.example) is that list with a paragraph
+above each one explaining what happens when you change it — copy that file rather than
+this block. A value that will not parse **stops the boot**, naming the variable: a relay
+that starts having silently ignored a bound is worse than one that refuses to start.
 
 The two per-room bounds are enforced by **evicting the oldest messages**, not by refusing
 new ones — a busy room keeps working, it just stops remembering the beginning. Someone who
@@ -175,6 +190,8 @@ decrypts, and the `message` event still carries plain `text`.
 | [`docs/protocol-v0.md`](docs/protocol-v0.md) | the M0 wire protocol: frames, limits, validation order |
 | [`docs/headless-v1.md`](docs/headless-v1.md) | the machine interface |
 | [`docs/protocol/corpus/`](docs/protocol/corpus/) | golden frame vectors — the cross-language contract |
+| [`docs/self-hosting.md`](docs/self-hosting.md) | running a relay: local, Docker, and behind TLS |
+| [`docs/deviations.md`](docs/deviations.md) | every deliberate departure from the spec, and when it ends |
 | [`docs/designs/`](docs/designs/terminal-e2ee-chat.md) | the design doc and its full review trail |
 | [`SECURITY.md`](SECURITY.md) | threat model, known gaps, and how to report a vulnerability |
 
@@ -197,8 +214,13 @@ identical error codes, or CI fails.
 
 ## Status
 
-M0 walking skeleton → M1 hardening → M2 OPAQUE auth → M3 E2EE → M4 integrity →
-M5 distribution.
+M0 walking skeleton → M1 hardening → **M1.5 dogfood distribution** → M2 OPAQUE auth →
+M3 E2EE → M4 integrity → M5 distribution.
+
+M1.5 is not in the specification's ladder. It takes M5's mechanics — an image, installable
+binaries, a documented deployment — and leaves §23's acceptance gate attached to the real
+M5, because three of its items are impossible before end-to-end encryption exists. The
+argument is [entry #1 in `docs/deviations.md`](docs/deviations.md).
 
 **M0 and M1 are complete.** M1 added §8's capacity bounds, history eviction, backpressure,
 A12's username no-recycle, and the property and differential testing of frame decoding that

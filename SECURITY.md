@@ -52,6 +52,11 @@ TLS at a proxy that logs everything behind it.
 
 <sub>Enforced by `internal/relay/url_test.go` (`TestInsecureRefusalExplainsItself`).</sub>
 
+[`docs/self-hosting.md`](docs/self-hosting.md) shows what a correctly deployed relay looks
+like — bound to loopback, TLS terminated by a reverse proxy in front of it — and is blunt
+about what that does and does not buy you. A hosted tunnel such as ngrok terminates TLS at
+its own edge, which puts that provider inside the trust boundary alongside the relay.
+
 ### There is no rate limiting, deliberately
 
 Spec §19 omits application-level rate limiting from this version: no token buckets, no
@@ -61,9 +66,11 @@ guessing, room floods, connection floods, and denial of service.**
 
 What stands in its place is a set of **capacity bounds** — hard ceilings that stop the relay
 consuming unbounded resources, which is a different thing from stopping an attacker trying.
-The bounds and their defaults live in [`Skulkd.Limits`](skulkd/lib/skulkd/limits.ex) and are
-summarised in the README's *Relay limits* section; they are not repeated here, so that there
-is one place to change them.
+The bounds and their defaults live in [`Skulkd.Limits`](skulkd/lib/skulkd/limits.ex), are
+summarised in the README's *Relay limits* section, and are documented one at a time — with
+what happens if you change each — in
+[`skulkd/skulkd.env.example`](skulkd/skulkd.env.example). They are not repeated here, so
+that there is one place to change them.
 
 They cover the number of active rooms, participants per room, retained history per room and
 across all rooms, and how far behind a single client may fall.
@@ -133,16 +140,44 @@ fixed and frozen as corpus vectors:
 The decision recording all of this is **D13** in
 [`docs/protocol-v0.md`](docs/protocol-v0.md).
 
+### Dependencies are scanned, and the first scan found fourteen things
+
+Four checks run in CI, on every pull request and again every Monday — because a
+vulnerability database changes without anyone touching this repository, and a scan that
+only runs on commits stops protecting during a quiet week.
+
+| Check | Language | Looks for |
+| --- | --- | --- |
+| `govulncheck` | Go | vulnerabilities reachable from called code |
+| `go-licenses` | Go | licenses outside an allowlist |
+| `mix deps.audit` | Elixir | Hex advisories |
+| `mix licenses.check` | Elixir | licenses outside an allowlist, **and dependencies declaring none** |
+
+**All four fail the build.** A check that can only warn is not a check.
+
+The first `govulncheck` run reported fourteen standard-library vulnerabilities reachable
+from called code — a quadratic parse in `net/url` reached through the WebSocket dial, four
+`crypto/tls` findings, an ASN.1 recursion bug, an x509 name-constraint auth bypass. The Go
+toolchain was bumped to 1.26.6 in the same change, which is what the check exists to force.
+
+Two limits of this worth stating rather than implying: Go scanning is symbol-level, so a
+vulnerability in a package the client imports but never calls does not fail the build; and
+neither language's check says anything about a dependency that is malicious rather than
+known-vulnerable.
+
+<sub>Wired up in `.github/workflows/ci.yml`; `task audit` runs the same four commands.</sub>
+
 ### Known gaps
 
 Stated rather than left for you to discover:
 
 - **skulk has never been audited**, by anyone.
-- **Dependency vulnerability and license scanning is not wired into CI.** Spec §22.3
-  requires it and it does not exist yet. Tracked as ROJ-50.
-- **There is no `docs/self-hosting.md`, no `Dockerfile`, and no example configuration.**
-  Deploying a relay today means reading the README and knowing what you are doing. Also
-  ROJ-50.
+- **The relay image is built and health-checked on every pull request, but not published
+  anywhere.** Running a relay still means building it yourself. Tracked as ROJ-53.
+- **`docs/deviations.md` is now two entries long.** §27 requires deviations to be recorded
+  before they are implemented; both were, and both name the milestone at which they end.
+  It is worth reading before deploying, because one of them is why the relay takes
+  environment variables rather than the flags §7.4 describes.
 - Message ordering, delivery, and presence are the relay's word — see the next section.
 
 ### Cryptographic dependencies
