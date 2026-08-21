@@ -113,6 +113,27 @@ defmodule Skulkd.BackpressureTest do
       assert texts == Enum.map(1..5, &"message #{&1}")
       refute Process.alive?(slow)
     end
+
+    test "the frame that finds a wedged member reaches everyone else first" do
+      # Order, not just arrival. Healthy members are served BEFORE anyone is
+      # dropped, so a member that cannot keep up cannot push its own departure in
+      # front of what the others were already owed. Reversing the two would still
+      # deliver both frames — which is why this reads them in sequence rather than
+      # matching on their types, since assert_receive happily reaches past a
+      # message it does not match.
+      {room_id, creator} = create(max_member_backlog: 3)
+      {slow, _} = join(room_id)
+      {witness, _} = join(room_id)
+
+      MemberStub.wedge(slow, 4)
+      assert {:ok, _} = chat(room_id, creator.sender_id, "owed to the witness")
+
+      assert_receive {:pushed, ^witness, first}
+      assert first["type"] == "chat.message"
+
+      assert_receive {:pushed, ^witness, second}
+      assert second["type"] == "presence.left"
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -171,6 +192,12 @@ defmodule Skulkd.BackpressureTest do
       assert witness_session.sender_id in ids
       assert creator.sender_id in ids
       assert count == length(ids)
+
+      # Note for anyone mutating this: removing the member from the roster is
+      # belt-and-braces here, because killing its process makes the room's monitor
+      # remove it a moment later regardless. The test that actually isolates the
+      # disconnect path is the joiner-roster one below, which reads a reply built
+      # inside the same call, before any :DOWN can be processed.
     end
 
     test "a joiner's own roster never contains a member dropped while admitting it" do
