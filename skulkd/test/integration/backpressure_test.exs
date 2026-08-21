@@ -27,7 +27,13 @@ defmodule Skulkd.Integration.BackpressureTest do
   alias Skulkd.SkulkClient
 
   @moduletag :integration
-  @moduletag timeout: 120_000
+  @moduletag timeout: 300_000
+
+  # High enough that a client which is merely busy never trips it — a healthy
+  # client's backlog is bounded by how fast it writes, and stays far below this —
+  # and low enough that a client which has stopped reading crosses it as soon as
+  # the buffers below the relay are full.
+  @bound 100
 
   # Protocol §4's ceiling on `text`, so each frame costs the buffers as much as the
   # protocol allows.
@@ -35,9 +41,24 @@ defmodule Skulkd.Integration.BackpressureTest do
 
   setup do
     previous = Application.get_env(:skulkd, :max_member_backlog)
-    Application.put_env(:skulkd, :max_member_backlog, 5)
+    Application.put_env(:skulkd, :max_member_backlog, @bound)
 
-    pid = start_supervised!({Bandit, plug: Skulkd.Router, port: 0, startup_log: false})
+    # A deliberately tiny send buffer. The relay cannot see a frame once the
+    # operating system has taken it, so the bigger the kernel's buffers the more
+    # data has to be pushed before `message_queue_len` moves at all — which is the
+    # best-effort caveat, restated as a test-runner problem. Linux on loopback
+    # auto-tunes these into the megabytes; macOS does not. Shrinking the buffer
+    # does not change the mechanism under test, only how much shouting it takes to
+    # reach it.
+    pid =
+      start_supervised!(
+        {Bandit,
+         plug: Skulkd.Router,
+         port: 0,
+         startup_log: false,
+         thousand_island_options: [transport_options: [sndbuf: 4_096, buffer: 4_096]]}
+      )
+
     {:ok, {_address, port}} = ThousandIsland.listener_info(pid)
 
     on_exit(fn ->
@@ -120,10 +141,21 @@ defmodule Skulkd.Integration.BackpressureTest do
     # difference between this and a client that simply crashed.
     {_, 0} = System.cmd("kill", ["-STOP", Integer.to_string(stalled_os_pid)])
 
-    for n <- 1..400, do: say(talker, @largest_text, "flood-#{n}")
+    # Flooded adaptively rather than by a fixed count. How much data it takes to
+    # fill the buffers below the relay is a property of the machine, not of the
+    # relay, so this keeps shouting until the room notices or the budget runs out.
+    dropped =
+      Enum.reduce_while(1..60, false, fn batch, _ ->
+        for n <- 1..50, do: say(talker, @largest_text, "flood-#{batch}-#{n}")
 
-    assert eventually(fn -> participant_count(room["room_id"]) == 1 end),
-           "the stalled client was never disconnected"
+        cond do
+          participant_count(room["room_id"]) == 1 -> {:halt, true}
+          batch == 60 -> {:halt, false}
+          true -> {:cont, false}
+        end
+      end)
+
+    assert dropped, "the stalled client was never disconnected"
 
     # The room is intact and the client that kept up is still in it and still
     # talking — the property §21 exists to protect.
