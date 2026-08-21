@@ -1,0 +1,15 @@
+# An ALLOWLIST, not a denylist. Everything is excluded and four paths are let
+# back in.
+#
+# The reason is specific rather than tidiness: skulkd/_build and skulkd/deps on a
+# developer's machine contain compiled BEAM files and, in argon2_elixir's case, a
+# NIF compiled as a Mach-O shared object for macOS. Copied into a Linux image
+# they would either be rebuilt (slow, silent) or loaded (fatal, at the first
+# password hash rather than at build). A denylist protects against the paths
+# somebody remembered; this protects against the ones they did not.
+*
+
+!skulkd/mix.exs
+!skulkd/mix.lock
+!skulkd/config
+!skulkd/lib
