@@ -73,7 +73,12 @@ skulk captures the mouse so the wheel works, which means selecting text needs **
 turns all of it off, and so does setting `NO_COLOR`.
 
 The password is shown once, on the same screen as the room id, and never again — `/room`
-deliberately does not repeat it.
+deliberately does not repeat it. It does copy the room id to your clipboard, which is how
+you get it out of a full-screen app that has taken the mouse.
+
+Times are shown in your local timezone; the wire format is UTC. Messages that were already
+in the room when you arrived are dimmed and marked off with a divider, so you can tell what
+was said before you got there.
 
 > `ws://` is accepted here only because `localhost` is a loopback address. A remote relay
 > must be `wss://`, or skulk refuses to send your password over it.
