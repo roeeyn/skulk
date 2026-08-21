@@ -72,6 +72,11 @@ skulk captures the mouse so the wheel works, which means selecting text needs **
 (option-drag on macOS). Names are coloured per person and your own is bold; `--no-color`
 turns all of it off, and so does setting `NO_COLOR`.
 
+Your name is assigned by the relay for the length of the connection — you get a new one
+each time you join. It is never one that already appears in the room's transcript, so a
+message from someone who has left cannot end up looking like it came from whoever is here
+now. Once their messages age out of the room's history, the name is free again.
+
 The password is shown once, on the same screen as the room id, and never again — `/room`
 deliberately does not repeat it. It does copy the room id to your clipboard, which is how
 you get it out of a full-screen app that has taken the mouse.

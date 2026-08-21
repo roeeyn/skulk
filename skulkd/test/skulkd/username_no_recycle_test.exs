@@ -161,14 +161,28 @@ defmodule Skulkd.UsernameNoRecycleTest do
 
   # ---------------------------------------------------------------------------
   describe "AC3 · the M0 guarantees still hold" do
-    test "connected members never share a name" do
+    test "each arrival is told every name already in the room" do
+      # Asserting only that twelve names came out distinct would be another test
+      # that passes on broken code: drawn from ninety thousand at random, twelve
+      # names collide about once in fifteen hundred runs even with the
+      # connected-set thrown away entirely. The deterministic form of
+      # "connected members never share a name" is that every name already here is
+      # in the set the next arrival is refused.
       {room_id, creator} = create()
+      assert taken_for_last_admission() == MapSet.new()
 
-      names = for _ <- 1..12, do: join(room_id).username
-      all = [creator.username | names]
+      Enum.reduce(1..8, MapSet.new([creator.username]), fn n, assigned ->
+        session = join(room_id)
+        taken = taken_for_last_admission()
 
-      assert length(Enum.uniq(all)) == length(all)
-      assert Enum.all?(all, &(&1 =~ ~r/^[a-z]+-[a-z]+-[0-9]{2}$/))
+        assert MapSet.subset?(assigned, taken),
+               "arrival #{n} was not told about #{inspect(MapSet.difference(assigned, taken))}"
+
+        assert session.username =~ ~r/^[a-z]+-[a-z]+-[0-9]{2}$/
+        refute MapSet.member?(assigned, session.username)
+
+        MapSet.put(assigned, session.username)
+      end)
     end
   end
 
