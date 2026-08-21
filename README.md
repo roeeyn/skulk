@@ -62,8 +62,10 @@ $ ./bin/skulk join amber-river-copper-moon-forest-glass-harbor-star \
     --server ws://localhost:4000/v1/ws
 ```
 
+skulk takes over the terminal while it runs and gives it back on exit, the way `vim` does.
 Type to chat. `/help` lists the commands, `/who` shows the room, `/quit` leaves — and so
-does Ctrl+C.
+does Ctrl+C. PgUp and PgDn scroll back through the transcript, and a message that arrives
+while you are reading waits at the bottom instead of yanking you down to it.
 
 > `ws://` is accepted here only because `localhost` is a loopback address. A remote relay
 > must be `wss://`, or skulk refuses to send your password over it.
