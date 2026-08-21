@@ -139,9 +139,10 @@ Stated rather than left for you to discover:
 
 - **skulk has never been audited**, by anyone.
 - **Dependency vulnerability and license scanning is not wired into CI.** Spec §22.3
-  requires it and it does not exist yet.
+  requires it and it does not exist yet. Tracked as ROJ-50.
 - **There is no `docs/self-hosting.md`, no `Dockerfile`, and no example configuration.**
-  Deploying a relay today means reading the README and knowing what you are doing.
+  Deploying a relay today means reading the README and knowing what you are doing. Also
+  ROJ-50.
 - Message ordering, delivery, and presence are the relay's word — see the next section.
 
 ### Cryptographic dependencies
