@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -64,7 +65,12 @@ func (o Outcome) ExitCode() int {
 // under the message instead of under the timestamp.
 type entry struct {
 	// A message carries these; a notice leaves them empty.
-	clock  string
+	//
+	// The time is stored as an instant, not as a formatted clock: the wire format
+	// is UTC (protocol D5) and the reader is not, so the conversion belongs at
+	// render time. Storing "14:07" would also make a date separator impossible to
+	// compute without re-parsing a string we had already thrown away.
+	at     time.Time
 	sender string
 	self   bool // this client sent it — derived from sender id, not username
 
@@ -87,7 +93,7 @@ func (e entry) prefix() string {
 		return e.indent
 	}
 	name, pad := fitSender(e.sender)
-	return e.clock + "  " + name + strings.Repeat(" ", pad) + " "
+	return e.clock() + "  " + name + strings.Repeat(" ", pad) + " "
 }
 
 // render is prefix() with styling, and must measure exactly the same.
@@ -96,8 +102,17 @@ func (e entry) render() string {
 		return e.indent
 	}
 	name, pad := fitSender(e.sender)
-	return clockStyle.Render(e.clock) + "  " +
+	return clockStyle.Render(e.clock()) + "  " +
 		senderStyle(e.sender, e.self).Render(name) + strings.Repeat(" ", pad) + " "
+}
+
+// clock is the message's local wall time. Always five columns, whatever the zone,
+// so the width arithmetic above does not depend on where the reader is.
+func (e entry) clock() string {
+	if e.at.IsZero() {
+		return "--:--"
+	}
+	return e.at.Local().Format("15:04")
 }
 
 // fitSender returns the username clipped to the sender column and the padding it
@@ -1000,7 +1015,7 @@ func (m *Model) invite() {
 
 func (m *Model) appendMessage(message relay.Message) {
 	m.entries = append(m.entries, entry{
-		clock:  clockOf(message.ReceivedAt),
+		at:     receivedAt(message.ReceivedAt),
 		sender: message.SenderUsername,
 		// By sender id, not username: usernames are connection-scoped and A12 only
 		// keeps retained history from reusing one. This is headless decision H6's
@@ -1063,13 +1078,18 @@ func style(line string, notice bool) string {
 	return line
 }
 
-// clockOf renders HH:MM from protocol v0's canonical timestamp. It is display
-// only — nothing downstream parses it back.
-func clockOf(timestamp string) string {
-	if len(timestamp) >= 16 {
-		return timestamp[11:16]
+// receivedAt parses protocol v0's canonical timestamp (D5:
+// YYYY-MM-DDTHH:MM:SS.sssZ, always UTC).
+//
+// A malformed one yields the zero time rather than an error: a clock that cannot
+// be read is a cosmetic problem, and refusing to display a message because its
+// timestamp is odd would be a much worse one.
+func receivedAt(timestamp string) time.Time {
+	at, err := time.Parse(time.RFC3339, timestamp)
+	if err != nil {
+		return time.Time{}
 	}
-	return "--:--"
+	return at
 }
 
 func validatePassword(password string) error {
