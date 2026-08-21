@@ -25,12 +25,11 @@ defmodule Skulkd.Room do
 
   require Logger
 
+  alias Skulkd.Capacity
   alias Skulkd.Clock
   alias Skulkd.Frames
+  alias Skulkd.Limits
   alias Skulkd.Username
-
-  # Spec §8. Only an accepted chat message refreshes it (§14).
-  @default_ttl_ms :timer.hours(120)
 
   # Spec §9.2. Exact UTF-8 bytes: never trimmed, never normalized.
   @min_password_bytes 12
@@ -49,6 +48,8 @@ defmodule Skulkd.Room do
       :clock,
       :timer,
       :expires_at,
+      :capacity,
+      :max_members,
       participants: %{},
       history: [],
       next_sequence: 1
@@ -70,11 +71,33 @@ defmodule Skulkd.Room do
   (amendment A11).
 
   This is the only operation that refreshes the room's TTL (spec §14).
+
+  Runs in the caller's process up to the `GenServer.call`, which is what makes the
+  §8 purge below safe — see `Skulkd.Rooms.purge_expired/1` for why a room must never
+  make that call itself. `opts` carries `:clock` for that sweep.
   """
-  @spec send_chat(String.t(), String.t(), String.t(), String.t()) ::
+  @spec send_chat(String.t(), String.t(), String.t(), String.t(), keyword()) ::
           {:ok, map()} | {:error, atom()}
-  def send_chat(room_id, sender_id, message_id, text) do
-    call(room_id, {:send_chat, sender_id, message_id, text})
+  def send_chat(room_id, sender_id, message_id, text, opts \\ []) do
+    request = {:send_chat, sender_id, message_id, text}
+
+    case call(room_id, request) do
+      {:error, :server_capacity} ->
+        # §8: "Before rejecting work due to a global capacity limit, the relay MUST
+        # purge expired rooms" — and the bullets under that sentence cover existing
+        # room chat, not only new rooms. Expired rooms hold retained history that
+        # still counts against the global cap, so the message that was just refused
+        # may well fit once the dead rooms have let go of it. One retry, and only
+        # when the sweep actually freed something.
+        if Skulkd.Rooms.purge_expired(opts) > 0 do
+          call(room_id, request)
+        else
+          {:error, :server_capacity}
+        end
+
+      result ->
+        result
+    end
   end
 
   @doc "The current roster — the wire form of `/who` (spec §6.3)."
@@ -127,7 +150,8 @@ defmodule Skulkd.Room do
   def init(opts) do
     room_id = Keyword.fetch!(opts, :room_id)
     clock = Keyword.get(opts, :clock, Clock.system())
-    ttl_ms = Keyword.get(opts, :ttl_ms, @default_ttl_ms)
+    ttl_ms = Keyword.get_lazy(opts, :ttl_ms, &Limits.room_ttl_ms/0)
+    capacity = Keyword.get(opts, :capacity, Capacity)
 
     state = %State{
       room_id: room_id,
@@ -135,15 +159,21 @@ defmodule Skulkd.Room do
       ttl_ms: ttl_ms,
       clock: clock,
       timer: Keyword.get(opts, :timer, Skulkd.Timer.System),
-      expires_at: DateTime.add(clock.(), ttl_ms, :millisecond)
+      expires_at: DateTime.add(clock.(), ttl_ms, :millisecond),
+      capacity: capacity,
+      max_members: Keyword.get_lazy(opts, :max_members, &Limits.max_members_per_room/0)
     }
+
+    # Before a single byte is reserved, so that a room which dies early still has
+    # something watching to give its bytes back.
+    :ok = Capacity.track(capacity)
 
     # §18.1: room lifecycle may be logged, but with a truncated digest rather than
     # the room id itself — the id is an unlisted locator, and a log is not a place
     # to publish one.
     Logger.info("room created #{digest(room_id)}")
 
-    {:ok, schedule_ttl_check(state)}
+    {:ok, state |> publish_deadline() |> schedule_ttl_check()}
   end
 
   @impl true
@@ -156,6 +186,82 @@ defmodule Skulkd.Room do
   end
 
   defp handle_live_call({:admit, member_pid}, _from, state) do
+    if map_size(state.participants) >= state.max_members do
+      # Spec §8's participant cap. The room is untouched — a full room is a working
+      # room, and §8 is explicit that capacity pressure never costs anyone already
+      # here their conversation.
+      {:reply, {:error, :room_full}, state}
+    else
+      admit_member(member_pid, state)
+    end
+  end
+
+  defp handle_live_call({:send_chat, sender_id, message_id, text}, _from, state) do
+    case Map.fetch(state.participants, sender_id) do
+      :error ->
+        {:reply, {:error, :room_not_found}, state}
+
+      {:ok, sender} ->
+        payload = %{
+          "room_id" => state.room_id,
+          "message_id" => message_id,
+          "sender_id" => sender_id,
+          "sender_username" => sender.username,
+          "sequence" => state.next_sequence,
+          "received_at" => Clock.to_wire(state.clock.()),
+          "text" => text
+        }
+
+        # Spec §8's global retained-history bound. Reserved before anything in the
+        # room changes, so a refusal costs nothing: no sequence consumed, no TTL
+        # refreshed, nothing broadcast, nothing stored. Amendment A8's captured
+        # `sender_username` is inside `payload` and is therefore accounted for — it
+        # is retained, so it is charged.
+        case Capacity.reserve(state.capacity, encoded_size(payload)) do
+          {:error, :server_capacity} ->
+            {:reply, {:error, :server_capacity}, state}
+
+          :ok ->
+            state =
+              %{
+                state
+                | history: [payload | state.history],
+                  next_sequence: state.next_sequence + 1,
+                  # Spec §14: only a stored chat message refreshes the deadline.
+                  # Joins, leaves, /who, and ping/pong deliberately do not.
+                  expires_at: DateTime.add(state.clock.(), state.ttl_ms, :millisecond)
+              }
+              |> publish_deadline()
+
+            broadcast(state, Frames.chat_message(payload))
+            {:reply, {:ok, payload}, state}
+        end
+    end
+  end
+
+  # Verification lives in Skulkd.Rooms rather than here so that argon2's deliberate
+  # slowness — tens of milliseconds — happens in the CALLER's process. Doing it
+  # inside the room would serialize every joiner behind every other joiner's hash
+  # and block chat traffic while it ran.
+  defp handle_live_call(:password_hash, _from, state) do
+    {:reply, {:ok, state.password_hash}, state}
+  end
+
+  # A room that is still alive has nothing to do here: the expiry guard in
+  # handle_call/3 is the whole of the reaping. Spec §8 forbids evicting a live room
+  # to make space, and this is the shape of that — a sweep can ask, and a live room
+  # says no.
+  defp handle_live_call(:reap, _from, state), do: {:reply, :ok, state}
+
+  defp handle_live_call(:participants, _from, state) do
+    {:reply, {:ok, roster(state)}, state}
+  end
+
+  defp handle_live_call({:leave, sender_id}, _from, state) do
+    {:reply, :ok, remove(state, sender_id)}
+  end
+
+  defp admit_member(member_pid, state) do
     case Username.generate(usernames(state)) do
       {:ok, username} ->
         sender_id = new_sender_id()
@@ -177,52 +283,6 @@ defmodule Skulkd.Room do
       {:error, reason} ->
         {:reply, {:error, reason}, state}
     end
-  end
-
-  defp handle_live_call({:send_chat, sender_id, message_id, text}, _from, state) do
-    case Map.fetch(state.participants, sender_id) do
-      :error ->
-        {:reply, {:error, :room_not_found}, state}
-
-      {:ok, sender} ->
-        payload = %{
-          "room_id" => state.room_id,
-          "message_id" => message_id,
-          "sender_id" => sender_id,
-          "sender_username" => sender.username,
-          "sequence" => state.next_sequence,
-          "received_at" => Clock.to_wire(state.clock.()),
-          "text" => text
-        }
-
-        state = %{
-          state
-          | history: [payload | state.history],
-            next_sequence: state.next_sequence + 1,
-            # Spec §14: only a stored chat message refreshes the deadline. Joins,
-            # leaves, /who, and ping/pong deliberately do not.
-            expires_at: DateTime.add(state.clock.(), state.ttl_ms, :millisecond)
-        }
-
-        broadcast(state, Frames.chat_message(payload))
-        {:reply, {:ok, payload}, state}
-    end
-  end
-
-  # Verification lives in Skulkd.Rooms rather than here so that argon2's deliberate
-  # slowness — tens of milliseconds — happens in the CALLER's process. Doing it
-  # inside the room would serialize every joiner behind every other joiner's hash
-  # and block chat traffic while it ran.
-  defp handle_live_call(:password_hash, _from, state) do
-    {:reply, {:ok, state.password_hash}, state}
-  end
-
-  defp handle_live_call(:participants, _from, state) do
-    {:reply, {:ok, roster(state)}, state}
-  end
-
-  defp handle_live_call({:leave, sender_id}, _from, state) do
-    {:reply, :ok, remove(state, sender_id)}
   end
 
   @impl true
@@ -253,7 +313,25 @@ defmodule Skulkd.Room do
   defp expire(state) do
     expired_at = Clock.to_wire(state.clock.())
     broadcast(state, Frames.room_expired(state.room_id, expired_at))
+
+    # Ordered before the caller's reply, which is what lets a §8 purge free bytes
+    # and have the sweeper see them freed. The monitor in Skulkd.Capacity is the
+    # backstop for the deaths that never reach this line at all.
+    Capacity.release_all(state.capacity)
+
     Logger.info("room expired #{digest(state.room_id)}")
+    state
+  end
+
+  # What this message costs the global counter: the bytes it will occupy in a
+  # `join.ok` history snapshot, which is the thing §8 bounds.
+  defp encoded_size(payload), do: byte_size(Jason.encode!(payload))
+
+  # The deadline `Skulkd.Rooms.purge_expired/1` sweeps on. Only the registered
+  # process may write its own registry value, so this has to happen in here — at
+  # init, and again whenever an accepted message moves the deadline.
+  defp publish_deadline(state) do
+    Skulkd.Rooms.publish_deadline(state.room_id, state.expires_at)
     state
   end
 
