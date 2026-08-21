@@ -63,9 +63,51 @@ func (o Outcome) ExitCode() int {
 // width forever. Keeping prefix and body apart is what lets continuation lines hang
 // under the message instead of under the timestamp.
 type entry struct {
-	prefix string
+	// A message carries these; a notice leaves them empty.
+	clock  string
+	sender string
+	self   bool // this client sent it — derived from sender id, not username
+
+	indent string // a notice's literal prefix, if any
 	body   string
 	notice bool
+}
+
+// senderColumn is the width the username is padded to, so message bodies line up.
+const senderColumn = 16
+
+// prefix is the UNSTYLED prefix, which is the one the width arithmetic needs.
+//
+// It cannot be a stored string any more: styling the username means the rendered
+// prefix contains escape bytes, and fmt's %-16s pads by byte count. Alignment
+// would shatter the moment colour landed. Storing the parts and composing here
+// keeps one definition of how wide a prefix is, whether or not it is coloured.
+func (e entry) prefix() string {
+	if e.sender == "" {
+		return e.indent
+	}
+	name, pad := fitSender(e.sender)
+	return e.clock + "  " + name + strings.Repeat(" ", pad) + " "
+}
+
+// render is prefix() with styling, and must measure exactly the same.
+func (e entry) render() string {
+	if e.sender == "" {
+		return e.indent
+	}
+	name, pad := fitSender(e.sender)
+	return clockStyle.Render(e.clock) + "  " +
+		senderStyle(e.sender, e.self).Render(name) + strings.Repeat(" ", pad) + " "
+}
+
+// fitSender returns the username clipped to the sender column and the padding it
+// needs. Clipping happens before styling, so escape bytes can never be cut in half.
+func fitSender(sender string) (string, int) {
+	if w := lipgloss.Width(sender); w > senderColumn {
+		return ansi.Truncate(sender, senderColumn, ""), 0
+	} else {
+		return sender, senderColumn - w
+	}
 }
 
 type phase int
@@ -639,7 +681,13 @@ var (
 	// The composing area as a region rather than a stray line. Box-drawing
 	// characters need no colour, so this renders the same on the ASCII profile.
 	inputBoxStyle = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1)
+
+	clockStyle = lipgloss.NewStyle()
 )
+
+// senderStyle is how a username is drawn. Colour arrives in a later commit; this
+// keeps the refactor a refactor.
+func senderStyle(string, bool) lipgloss.Style { return lipgloss.NewStyle() }
 
 func (m Model) View() string {
 	switch m.phase {
@@ -717,23 +765,71 @@ func (m Model) chatView() string {
 // already shows the answer: elide the middle of the id and keep both ends, which is
 // what a human needs to recognise which room they are in.
 func (m Model) statusBar() string {
-	width := m.width
+	return joinSegments(m.width,
+		// Flex: the room id absorbs whatever the other segments leave, shortening
+		// from the middle so both ends survive.
+		segment{text: m.roomID, flex: true, shrink: elide},
+		// On a very narrow terminal the word "online" is a luxury; the NUMBER is
+		// not, because "am I alone in here?" is what the bar exists to answer.
+		segment{text: fmt.Sprintf("%d online", m.online), shrink: dropTrailingWord},
+	)
+}
 
-	// On a very narrow terminal the word "online" is a luxury; the NUMBER is not,
-	// because "am I alone in here?" is the question the bar exists to answer.
-	count := fmt.Sprintf("  ·  %d online", m.online)
-	if lipgloss.Width(count) > width/2 {
-		count = fmt.Sprintf("  ·  %d", m.online)
+// segment is one piece of the status bar.
+//
+// A format string would have been shorter today and wrong at M4, which appends a
+// continuity indicator to this bar (wireframe panel 1). A list absorbs a new
+// piece; a Sprintf has to be rewritten, and so does every width rule around it.
+type segment struct {
+	text string
+	flex bool // takes the width the others do not need; at most one
+	// shrink makes the text fit a limit, or is nil to take it or leave it.
+	shrink func(text string, limit int) string
+}
+
+const segmentSeparator = "  ·  "
+
+func joinSegments(width int, segments ...segment) string {
+	separator := lipgloss.Width(segmentSeparator)
+	rendered := make([]string, len(segments))
+
+	// Fixed segments first, each shrunk if it alone would eat half the bar.
+	spoken := 0
+	for i, s := range segments {
+		if s.flex {
+			continue
+		}
+		text := s.text
+		if s.shrink != nil && lipgloss.Width(text)+separator > width/2 {
+			text = s.shrink(text, width/2)
+		}
+		rendered[i] = text
+		spoken += lipgloss.Width(text) + separator
 	}
 
-	room := m.roomID
-	if available := width - lipgloss.Width(count); lipgloss.Width(room) > available {
-		room = elide(room, available)
+	// Then the flex segment, into what is left.
+	for i, s := range segments {
+		if !s.flex {
+			continue
+		}
+		text := s.text
+		if available := width - spoken; s.shrink != nil && lipgloss.Width(text) > available {
+			text = s.shrink(text, available)
+		}
+		rendered[i] = text
 	}
 
 	// Final guard: at absurd widths nothing fits properly, and overflowing the
 	// screen is worse than losing characters.
-	return ansi.Truncate(room+count, width, "")
+	return ansi.Truncate(strings.Join(rendered, segmentSeparator), width, "")
+}
+
+// dropTrailingWord shortens "3 online" to "3".
+func dropTrailingWord(text string, _ int) string {
+	if i := strings.IndexByte(text, ' '); i > 0 {
+		return text[:i]
+	}
+	return text
 }
 
 // elide shortens a hyphenated room id from the middle, keeping the first words and
@@ -836,7 +932,7 @@ func (m *Model) note(text string) {
 // indent lives in prefix so that a wrap hangs under it instead of resetting to
 // column zero.
 func (m *Model) plain(text string) {
-	m.entries = append(m.entries, entry{prefix: "    ", body: text, notice: true})
+	m.entries = append(m.entries, entry{indent: "    ", body: text, notice: true})
 }
 
 // invite writes what another person needs to get here. Never the password: it
@@ -855,8 +951,14 @@ func (m *Model) invite() {
 
 func (m *Model) appendMessage(message relay.Message) {
 	m.entries = append(m.entries, entry{
-		prefix: fmt.Sprintf("%s  %-16s ", clockOf(message.ReceivedAt), message.SenderUsername),
-		body:   message.Text,
+		clock:  clockOf(message.ReceivedAt),
+		sender: message.SenderUsername,
+		// By sender id, not username: usernames are connection-scoped and A12 only
+		// keeps retained history from reusing one. This is headless decision H6's
+		// derivation, and sessionReadyMsg sets senderID before replaying history,
+		// so a replayed message of your own is still yours.
+		self: message.SenderID != "" && message.SenderID == m.senderID,
+		body: message.Text,
 	})
 }
 
@@ -870,12 +972,15 @@ func (m Model) rows() []string {
 
 	var out []string
 	for _, e := range m.entries {
-		indent := lipgloss.Width(e.prefix)
+		prefix := e.prefix()
+		indent := lipgloss.Width(prefix)
 
 		// Too narrow to hang the body under the prefix: wrap the whole line flat
-		// rather than producing a one-word-per-row column.
+		// rather than producing a one-word-per-row column. The prefix is wrapped
+		// along with the body here, so it goes out unstyled — at this width the
+		// sender colour is the first thing worth losing.
 		if width-indent < 24 {
-			for _, line := range wrap(e.prefix+e.body, width) {
+			for _, line := range wrap(prefix+e.body, width) {
 				out = append(out, style(line, e.notice))
 			}
 			continue
@@ -883,9 +988,9 @@ func (m Model) rows() []string {
 
 		for i, line := range wrap(e.body, width-indent) {
 			if i == 0 {
-				out = append(out, style(e.prefix+line, e.notice))
+				out = append(out, e.render()+style(line, e.notice))
 			} else {
-				out = append(out, style(strings.Repeat(" ", indent)+line, e.notice))
+				out = append(out, strings.Repeat(" ", indent)+style(line, e.notice))
 			}
 		}
 	}
