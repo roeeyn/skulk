@@ -1,0 +1,143 @@
+# Regular development tasks for skulk.
+#
+# `task` from anywhere in the repo — go-task walks upward to find this file and
+# runs every command from the directory it lives in, so paths here are always
+# relative to the repo root. The Elixir tasks set `dir: skulkd` for themselves.
+#
+# Nothing here is silent on purpose: each command is echoed before it runs, so
+# the Taskfile stays a shortcut rather than a place commands go to hide. Anything
+# it does you can copy off the screen and run by hand.
+#
+# Single-language tasks set `dir:`. The three that span both languages — fmt,
+# lint, clean — spell out `cd skulkd &&` instead, so the echoed line is a whole
+# command you can paste at the root rather than half of one.
+#
+# Install go-task: https://taskfile.dev/installation
+
+version: "3"
+
+vars:
+  # The port the relay listens on and the one the client tasks dial. One variable
+  # for both, so `task relay PORT=4001` and `task create PORT=4001` agree.
+  PORT: '{{.PORT | default "4000"}}'
+  SERVER: 'ws://localhost:{{.PORT}}/v1/ws'
+  CLIENT: bin/skulk
+
+tasks:
+  default:
+    desc: List the available tasks
+    cmds:
+      - task --list
+    silent: true
+
+  # ---------------------------------------------------------------- running
+
+  relay:
+    desc: Run the relay in the foreground (PORT=4000)
+    dir: skulkd
+    cmds:
+      # The port is an application env value with a compiled-in default, so it is
+      # overridden through the Erlang VM rather than an environment variable.
+      # Handy for a second relay: `task relay PORT=4001`.
+      - elixir --erl "-skulkd port {{.PORT}}" -S mix run --no-halt
+
+  health:
+    desc: Check that a relay is up
+    cmds:
+      - curl -s http://localhost:{{.PORT}}/healthz
+
+  create:
+    desc: Create a room and join it
+    deps: [build]
+    interactive: true
+    cmds:
+      - ./{{.CLIENT}} create --server {{.SERVER}}
+
+  join:
+    desc: Join an existing room — task join ROOM=<room-id>
+    deps: [build]
+    interactive: true
+    requires:
+      vars: [ROOM]
+    cmds:
+      - ./{{.CLIENT}} join {{.ROOM}} --server {{.SERVER}}
+
+  # ---------------------------------------------------------------- building
+
+  build:
+    desc: Build the client to bin/skulk
+    sources:
+      - "**/*.go"
+      - "*.go"
+      - go.mod
+      - go.sum
+    generates:
+      - "{{.CLIENT}}"
+    cmds:
+      - go build -o {{.CLIENT}} ./cmd/skulk
+
+  deps:
+    desc: Fetch the relay's Elixir dependencies
+    dir: skulkd
+    cmds:
+      - mix deps.get
+
+  # ---------------------------------------------------------------- testing
+
+  test:
+    desc: Run every suite — client, relay, and the integration lane
+    cmds:
+      - task: test:client
+      - task: test:relay
+      - task: test:integration
+
+  test:client:
+    desc: Go tests with the race detector
+    cmds:
+      # -race because the client is concurrent by nature and the detector has
+      # found real bugs here that the plain run did not.
+      - go test -race ./...
+
+  test:relay:
+    desc: Elixir tests
+    dir: skulkd
+    cmds:
+      - mix test
+
+  test:integration:
+    desc: The milestone gate — ExUnit drives real skulk --headless binaries
+    dir: skulkd
+    cmds:
+      # The mix alias builds the client into bin/skulk itself, and honours
+      # SKULK_BIN if you would rather point it at one you already have.
+      - mix test.integration
+
+  # ---------------------------------------------------------------- hygiene
+
+  fmt:
+    desc: Format both languages
+    cmds:
+      - gofmt -w .
+      - cd skulkd && mix format
+
+  ci:
+    desc: Everything CI runs, in CI's order — the pre-push check
+    cmds:
+      - task: lint
+      - task: test
+
+  lint:
+    desc: Format checks, vet, and a build
+    cmds:
+      # gofmt -l exits 0 even when it lists files, so on its own it reports
+      # nothing to a script. CI does the same guard.
+      - test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - go vet ./...
+      - go build ./...
+      - cd skulkd && mix format --check-formatted
+
+  clean:
+    desc: Remove build output
+    cmds:
+      - rm -rf bin
+      - cd skulkd && mix clean
