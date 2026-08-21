@@ -92,8 +92,6 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, serverEnv, no
 		return headless.ExitUsage
 	}
 
-	_ = debug
-
 	if *headlessMode {
 		runner := &headless.Runner{
 			In:            stdin,
@@ -102,20 +100,21 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, serverEnv, no
 			Server:        endpoint,
 			AllowInsecure: *allowInsecure,
 			ClientVersion: Version,
+			Debug:         *debug,
 		}
 		return runner.Run(context.Background())
 	}
 
 	switch subcommand {
 	case "create":
-		return runTUI(endpoint, "", false, *allowInsecure, stdin, stdout, stderr)
+		return runTUI(endpoint, "", false, *allowInsecure, *debug, stdin, stdout, stderr)
 
 	case "join":
 		if roomID == "" {
 			fmt.Fprintln(stderr, "skulk: join needs a room id: skulk join <ROOM_ID>")
 			return headless.ExitUsage
 		}
-		return runTUI(endpoint, roomID, true, *allowInsecure, stdin, stdout, stderr)
+		return runTUI(endpoint, roomID, true, *allowInsecure, *debug, stdin, stdout, stderr)
 
 	case "":
 		fmt.Fprintln(stderr, usage)
@@ -136,7 +135,7 @@ const usage = `skulk — terminal chat for humans and AI agents
 
 The relay URL comes from --server or SKULK_SERVER; skulk ships no default relay.`
 
-func runTUI(endpoint, roomID string, joining, allowInsecure bool, stdin io.Reader, stdout, stderr io.Writer) int {
+func runTUI(endpoint, roomID string, joining, allowInsecure, debug bool, stdin io.Reader, stdout, stderr io.Writer) int {
 	if _, err := relay.CheckServerURL(endpoint, allowInsecure); err != nil {
 		fmt.Fprintf(stderr, "skulk: %v\n", err)
 		return headless.ExitTransport
@@ -146,7 +145,7 @@ func runTUI(endpoint, roomID string, joining, allowInsecure bool, stdin io.Reade
 		Server:    endpoint,
 		RoomID:    roomID,
 		Joining:   joining,
-		Dial:      tui.DialRelay,
+		Dial:      tui.DialRelayWith(relay.Options{Debug: debugWriter(debug, stderr)}),
 		Generate:  wordlist.NewPassphrase,
 		NewRoomID: wordlist.NewRoomID,
 	})
@@ -173,6 +172,19 @@ func runTUI(endpoint, roomID string, joining, allowInsecure bool, stdin io.Reade
 		return m.Outcome().ExitCode()
 	}
 	return headless.ExitOK
+}
+
+// debugWriter is stderr when --debug asked for diagnostics, and nil otherwise.
+//
+// Worth knowing before using it with the TUI: the program runs full-screen and
+// stderr is the same terminal, so diagnostics scribble over the display.
+// §18.2 mandates stderr, so the answer is a redirect — `skulk create --debug
+// 2>skulk.log` — not a different destination.
+func debugWriter(debug bool, stderr io.Writer) io.Writer {
+	if !debug {
+		return nil
+	}
+	return stderr
 }
 
 // applyColorChoice honours spec §7.2's --no-color, and NO_COLOR alongside it.

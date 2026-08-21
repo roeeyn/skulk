@@ -56,9 +56,13 @@ const (
 
 // Runner is one headless session: one process, one room.
 type Runner struct {
-	In            io.Reader
-	Out           io.Writer
-	Err           io.Writer
+	In  io.Reader
+	Out io.Writer
+	Err io.Writer
+	// Debug turns on §7.2's diagnostics. They go to Err, never Out: docs/headless-v1.md
+	// §3 promises stdout carries nothing but protocol JSON, and --debug does not
+	// get to break that for every agent piping it into a parser.
+	Debug         bool
 	Server        string
 	AllowInsecure bool
 	ClientVersion string
@@ -339,7 +343,7 @@ func (r *Runner) connect(ctx context.Context, id string) bool {
 		return r.fatal(id, codeTransport, err.Error(), ExitTransport)
 	}
 
-	session, err := relay.Dial(ctx, u.String())
+	session, err := relay.DialWithOptions(ctx, u.String(), relay.Options{Debug: r.debugWriter()})
 	if err != nil {
 		return r.fatal(id, codeTransport, err.Error(), ExitTransport)
 	}
@@ -546,4 +550,13 @@ func readLine(reader *bufio.Reader, max int) (line []byte, tooLong bool, err err
 			return line, tooLong, nil
 		}
 	}
+}
+
+// debugWriter is Err when --debug asked for diagnostics, and nil otherwise —
+// §18.2: normal operation produces none at all.
+func (r *Runner) debugWriter() io.Writer {
+	if !r.Debug {
+		return nil
+	}
+	return r.Err
 }

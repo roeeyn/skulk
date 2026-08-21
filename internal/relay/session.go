@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"time"
@@ -93,6 +94,9 @@ func Code(err error) string {
 
 // Session is one connection to one relay, and — after Create or Join — one room.
 type Session struct {
+	debug   io.Writer
+	debugMu sync.Mutex
+
 	conn   *websocket.Conn
 	events chan Event
 
@@ -125,6 +129,10 @@ type Options struct {
 	// Keepalive is the ping interval. Zero means DefaultKeepalive; negative
 	// disables keepalives entirely (tests that assert timeout behaviour want that).
 	Keepalive time.Duration
+
+	// Debug receives one line per protocol event: spec §7.2's --debug. Nil is
+	// normal operation, which §18.2 requires to produce no diagnostics at all.
+	Debug io.Writer
 }
 
 // Dial connects to a relay. The URL must already have passed CheckServerURL.
@@ -134,8 +142,11 @@ func Dial(ctx context.Context, endpoint string) (*Session, error) {
 
 // DialWithOptions is Dial with the knobs exposed, for tests.
 func DialWithOptions(ctx context.Context, endpoint string, opts Options) (*Session, error) {
+	debugf(opts.Debug, "dialing %s", endpoint)
+
 	conn, _, err := websocket.Dial(ctx, endpoint, nil)
 	if err != nil {
+		debugf(opts.Debug, "dial failed: %v", err)
 		return nil, fmt.Errorf("connecting to relay: %w", err)
 	}
 
@@ -149,7 +160,9 @@ func DialWithOptions(ctx context.Context, endpoint string, opts Options) (*Sessi
 		events:  make(chan Event, 64),
 		pending: make(map[string]chan result),
 		done:    make(chan struct{}),
+		debug:   opts.Debug,
 	}
+	s.logf("connected")
 	go s.read()
 
 	if interval := opts.Keepalive; interval >= 0 {
@@ -318,6 +331,7 @@ func (s *Session) write(frame protocol.Frame) error {
 	if err != nil {
 		return fmt.Errorf("encoding %s: %w", frame.Type, err)
 	}
+	s.logf("send %s %d bytes", frame.Type, len(encoded))
 	return s.conn.Write(context.Background(), websocket.MessageText, encoded)
 }
 
@@ -341,9 +355,11 @@ func (s *Session) read() {
 		// malformed frame is a relay we cannot trust to have understood ours.
 		frame, rej := protocol.Decode(protocol.RoleClient, kind, data)
 		if rej != nil {
+			s.logf("recv rejected %d bytes: %s", len(data), rej.Code)
 			s.fail(fmt.Sprintf("relay sent an invalid frame: %s", rej.Code))
 			return
 		}
+		s.logf("recv %s %d bytes", frame.Type, len(data))
 
 		s.route(frame)
 	}
@@ -409,7 +425,27 @@ func (s *Session) emit(event Event) {
 	}
 }
 
+// logf writes one diagnostic line, and only when --debug asked for them.
+//
+// §18.2 permits protocol states, event types, sizes and sanitized errors — and
+// nothing else. Every call site passes a frame TYPE and a byte COUNT; none
+// passes a payload, a password, or a room id. That is a discipline about call
+// sites, which is why the test asserts on the OUTPUT rather than trusting it.
+func (s *Session) logf(format string, args ...any) {
+	s.debugMu.Lock()
+	defer s.debugMu.Unlock()
+	debugf(s.debug, format, args...)
+}
+
+func debugf(w io.Writer, format string, args ...any) {
+	if w == nil {
+		return
+	}
+	fmt.Fprintf(w, "skulk debug: "+format+"\n", args...)
+}
+
 func (s *Session) fail(reason string) {
+	s.logf("disconnected: %s", reason)
 	s.emit(Event{Kind: EventDisconnect, Reason: reason})
 }
 
