@@ -187,7 +187,8 @@ defmodule Skulkd.Rooms do
           :max_members,
           :max_history_messages,
           :max_history_bytes,
-          :max_member_backlog
+          :max_member_backlog,
+          :generate_username
         ])
     }
 

@@ -53,6 +53,7 @@ defmodule Skulkd.Room do
       :max_history_messages,
       :max_history_bytes,
       :max_member_backlog,
+      :generate_username,
       participants: %{},
       # Spec §15 appends at one end and evicts from the other, which is the one
       # access pattern a list cannot serve without walking it on every message.
@@ -177,7 +178,8 @@ defmodule Skulkd.Room do
         Keyword.get_lazy(opts, :max_history_messages, &Limits.max_history_messages/0),
       max_history_bytes: Keyword.get_lazy(opts, :max_history_bytes, &Limits.max_history_bytes/0),
       max_member_backlog:
-        Keyword.get_lazy(opts, :max_member_backlog, &Limits.max_member_backlog/0)
+        Keyword.get_lazy(opts, :max_member_backlog, &Limits.max_member_backlog/0),
+      generate_username: Keyword.get(opts, :generate_username, &Username.generate/1)
     }
 
     # Before a single byte is reserved, so that a room which dies early still has
@@ -347,7 +349,7 @@ defmodule Skulkd.Room do
   end
 
   defp admit_member(member_pid, state) do
-    case Username.generate(usernames(state)) do
+    case state.generate_username.(unavailable_usernames(state)) do
       {:ok, username} ->
         sender_id = new_sender_id()
         ref = Process.monitor(member_pid)
@@ -556,7 +558,31 @@ defmodule Skulkd.Room do
     |> Enum.map(&%{"sender_id" => &1.sender_id, "username" => &1.username})
   end
 
-  defp usernames(state), do: Enum.map(Map.values(state.participants), & &1.username)
+  # Amendment A12, now spec §6.4: a name is unavailable while it is worn by someone
+  # here OR while it still appears in retained history.
+  #
+  # §6.4 only ever guaranteed uniqueness among the connected, and A8 captures the
+  # name into each stored message at send time. Without this, someone leaves,
+  # their name is handed to a newcomer, and a later joiner replaying history sees
+  # the departed person's words attributed to a different, present person. At M4
+  # the continuity fold binds `sender_username` precisely because it is
+  # relay-controlled and re-attributable — this is the relay re-attributing by
+  # accident.
+  #
+  # Scanned rather than tallied incrementally. A join already pays tens of
+  # milliseconds for argon2, so walking at most 1,000 retained messages costs
+  # nothing beside it — and a count that had to be kept in step across every append
+  # and every eviction is a second mechanism that can disagree with the first.
+  # Eviction frees a name here for free, because the name is simply no longer there
+  # to be found.
+  defp unavailable_usernames(state) do
+    connected = Enum.map(Map.values(state.participants), & &1.username)
+
+    state.history
+    |> :queue.to_list()
+    |> Enum.map(fn {payload, _size} -> payload["sender_username"] end)
+    |> Enum.into(MapSet.new(connected))
+  end
 
   # Protocol §4: 128 random bits, unpadded Base64URL — 22 characters.
   defp new_sender_id do
