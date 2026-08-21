@@ -60,6 +60,37 @@ defmodule Skulkd.SecurityDocTest do
     end
   end
 
+  # Every gap SECURITY.md confesses to, paired with the file whose existence would
+  # make the confession false. ROJ-50 closed both of these; the pairing is what
+  # makes the section self-correcting rather than a snapshot of one afternoon.
+  @confessions [
+    {"../../../Dockerfile", ~r/no `?Dockerfile`?/i},
+    {"../../../docs/self-hosting.md", ~r/no `?docs\/self-hosting\.md`?/i},
+    {"../../../.github/workflows/ci.yml", ~r/scanning is not wired into CI/i}
+  ]
+
+  test "the known gaps do not confess something that has since been fixed" do
+    # A security document's credibility is the reason it exists, and a stale
+    # confession spends it in the same direction a stale version number does: the
+    # reader cannot tell which of the remaining gaps are also out of date.
+    security = File.read!(@security_md)
+
+    for {path, confession} <- @confessions do
+      resolved = Path.expand(path, __DIR__)
+
+      if File.exists?(resolved) do
+        refute security =~ confession,
+               """
+               SECURITY.md still lists a known gap that #{Path.basename(resolved)} closed.
+
+               Delete the line rather than leaving it. A reader who checks one
+               confession, finds it false, and stops trusting the rest is behaving
+               correctly.
+               """
+      end
+    end
+  end
+
   test "the honesty notice has not been quietly softened" do
     # §27 and the ticket's own acceptance criteria: the relay reads every message,
     # stated with no hedging, until end-to-end encryption actually ships. This is
