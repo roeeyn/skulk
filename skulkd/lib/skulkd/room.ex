@@ -52,6 +52,7 @@ defmodule Skulkd.Room do
       :max_members,
       :max_history_messages,
       :max_history_bytes,
+      :max_member_backlog,
       participants: %{},
       # Spec §15 appends at one end and evicts from the other, which is the one
       # access pattern a list cannot serve without walking it on every message.
@@ -174,7 +175,9 @@ defmodule Skulkd.Room do
       max_members: Keyword.get_lazy(opts, :max_members, &Limits.max_members_per_room/0),
       max_history_messages:
         Keyword.get_lazy(opts, :max_history_messages, &Limits.max_history_messages/0),
-      max_history_bytes: Keyword.get_lazy(opts, :max_history_bytes, &Limits.max_history_bytes/0)
+      max_history_bytes: Keyword.get_lazy(opts, :max_history_bytes, &Limits.max_history_bytes/0),
+      max_member_backlog:
+        Keyword.get_lazy(opts, :max_member_backlog, &Limits.max_member_backlog/0)
     }
 
     # Before a single byte is reserved, so that a room which dies early still has
@@ -300,7 +303,7 @@ defmodule Skulkd.Room do
           # recoverable, admitting past the cap is not.
           release(state.capacity, delta)
 
-          broadcast(state, Frames.chat_message(payload))
+          state = broadcast(state, Frames.chat_message(payload))
           {:reply, {:ok, payload}, state}
       end
     end
@@ -354,11 +357,17 @@ defmodule Skulkd.Room do
 
         # Protocol §5.7: the joiner is not told about its own arrival — it already
         # has the full roster from create.ok/join.ok.
-        broadcast(
-          state,
-          Frames.presence_joined(sender_id, username, map_size(state.participants)),
-          except: sender_id
-        )
+        #
+        # The reply is built from the state this returns, not the one above it: if
+        # announcing the arrival finds a member over the backlog bound, the joiner
+        # must not be handed a roster containing someone everyone else just watched
+        # leave.
+        state =
+          broadcast(
+            state,
+            Frames.presence_joined(sender_id, username, map_size(state.participants)),
+            except: sender_id
+          )
 
         {:reply, {:ok, session(state, sender_id, username)}, state}
 
@@ -394,7 +403,7 @@ defmodule Skulkd.Room do
 
   defp expire(state) do
     expired_at = Clock.to_wire(state.clock.())
-    broadcast(state, Frames.room_expired(state.room_id, expired_at))
+    push_all(state, Frames.room_expired(state.room_id, expired_at))
 
     # Ordered before the caller's reply, which is what lets a §8 purge free bytes
     # and have the sweeper see them freed. The monitor in Skulkd.Capacity is the
@@ -438,23 +447,81 @@ defmodule Skulkd.Room do
 
         state = %{state | participants: participants}
 
+        # The broadcast's result IS the return value. Announcing this departure can
+        # itself find another member over the backlog bound, and dropping that one
+        # has to survive back out through here — discarding this would kill their
+        # process and leave them in the roster forever.
         broadcast(
           state,
           Frames.presence_left(sender_id, participant.username, map_size(participants))
         )
-
-        state
     end
   end
 
+  @doc false
+  # Fans a frame out to every member, and disconnects any that has fallen too far
+  # behind (spec §21, design A13). Returns the state, because dropping a member
+  # changes it — every caller must thread it through.
+  #
+  # **The bound is best-effort, and saying so is part of the design.**
+  # `message_queue_len` is a snapshot, and frames beyond it sit in Bandit's socket
+  # write buffer and the kernel's send buffer, neither of which the relay can see.
+  # The guarantee is that runaway growth is cut off, not an exact byte ceiling. A
+  # bound described as exact when it is approximate is worse than no bound, because
+  # someone will reason about it.
+  #
+  # Healthy members are served BEFORE anyone is dropped: a member that cannot keep
+  # up must not delay the ones that can, which is the whole point of §21.
   defp broadcast(state, frame, opts \\ []) do
     except = Keyword.get(opts, :except)
 
-    for {sender_id, participant} <- state.participants, sender_id != except do
+    {behind, keeping_up} =
+      state.participants
+      |> Enum.reject(fn {sender_id, _} -> sender_id == except end)
+      |> Enum.split_with(fn {_, participant} ->
+        behind?(participant, state.max_member_backlog)
+      end)
+
+    for {_sender_id, participant} <- keeping_up do
+      send(participant.pid, {:push, frame})
+    end
+
+    Enum.reduce(behind, state, fn {sender_id, participant}, state ->
+      disconnect(state, sender_id, participant)
+    end)
+  end
+
+  # Fans out without checking anyone: the room is stopping, and a presence.left
+  # nobody can act on immediately before `room.expired` is noise, not courtesy.
+  defp push_all(state, frame) do
+    for {_sender_id, participant} <- state.participants do
       send(participant.pid, {:push, frame})
     end
 
     :ok
+  end
+
+  defp behind?(participant, max_backlog) do
+    case Process.info(participant.pid, :message_queue_len) do
+      {:message_queue_len, queued} -> queued > max_backlog
+      # Already gone. The monitor is what cleans that up; claiming it here would
+      # race the :DOWN and double-announce the same departure.
+      nil -> false
+    end
+  end
+
+  defp disconnect(state, sender_id, participant) do
+    # §18.1: the room's digest, never its id, and nothing about who was dropped.
+    Logger.info("member disconnected for backlog #{digest(state.room_id)}")
+
+    # `:kill` rather than anything gentler, for the same reason a close frame is
+    # useless here: every other signal arrives through the mailbox, and the mailbox
+    # is what is wedged. The member may even be mid-call to this room — its own
+    # chat.send may be the broadcast that kills it — and the reply then goes
+    # nowhere, which is a send into the void rather than a crash.
+    Process.exit(participant.pid, :kill)
+
+    remove(state, sender_id)
   end
 
   defp session(state, sender_id, username) do
