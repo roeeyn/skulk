@@ -117,6 +117,21 @@ jobs:
       # ROJ-33 that the plain run did not: a production data race on the exit code,
       # a test harness racing the writer it read, and unsynchronised state in the
       # fake relay. The cost is a couple of seconds.
+      # `-X` is silently a no-op when it names a symbol that does not exist, so
+      # renaming or moving cmd/skulk/main.go's `Version` would send every release
+      # back to 0.0.0-dev with no error anywhere — not at build, not at release,
+      # not until somebody reports a bug against a version that means nothing.
+      # This is the only thing that notices.
+      - name: The version is injectable at build time
+        run: |
+          go build -ldflags "-X main.Version=9.9.9-ldflags-check" -o /tmp/skulk-version ./cmd/skulk
+          got="$(/tmp/skulk-version --version)"
+          echo "$got"
+          if [ "$got" != "skulk 9.9.9-ldflags-check" ]; then
+            echo "::error::-ldflags '-X main.Version' did not take. Did Version move or get renamed? .goreleaser.yaml names it."
+            exit 1
+          fi
+
       - name: go test
         run: go test -race ./...
 

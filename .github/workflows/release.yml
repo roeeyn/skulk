@@ -4,11 +4,11 @@ name: Release
 # every PR and throws it away, which is what keeps `latest` meaning the last
 # RELEASE rather than the last commit.
 #
-# ROJ-52 will add the client's release here, on the same trigger, so one tag
-# produces a client and a relay built from the same commit. That pairing is the
-# point: M2 and M3 are protocol bumps, and a stale client against a new relay gets
-# `unsupported_protocol_version` and a closed connection — the protocol working
-# correctly, looking exactly like the app being broken.
+# One tag produces BOTH halves — the client, via goreleaser, and the relay image
+# — from the same commit. That pairing is the point: M2 and M3 are protocol
+# bumps, and a stale client against a new relay gets
+# `unsupported_protocol_version` and a closed connection, which is the protocol
+# working correctly and looks exactly like the app being broken.
 on:
   push:
     tags: ["v*"]
@@ -26,6 +26,45 @@ permissions:
   packages: write
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # The client: macOS binaries, a GitHub release, and the Homebrew cask.
+  #
+  # Configured in .goreleaser.yaml. On a manual dispatch this builds a snapshot
+  # and publishes nothing, which is the rehearsal for a tag that cannot be taken
+  # back.
+  #
+  # NEEDS A SECRET the repository does not have by default: HOMEBREW_TAP_TOKEN, a
+  # PAT with write access to roeeyn/homebrew-skulk. GITHUB_TOKEN is scoped to
+  # THIS repository and cannot push to the tap.
+  client:
+    name: release · the skulk client
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      # Job-level permissions replace the workflow's rather than adding to them,
+      # and creating a GitHub release needs write. No packages here — that is the
+      # relay job's business.
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # goreleaser builds the changelog from history; a shallow clone has none.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: ${{ github.event_name == 'push' && 'release --clean' || 'build --snapshot --clean' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+  # ---------------------------------------------------------------------------
   publish:
     name: publish · ghcr.io/roeeyn/skulkd
     # linux/arm64 ONLY, and this runner builds it natively.

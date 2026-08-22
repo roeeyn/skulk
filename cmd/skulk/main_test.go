@@ -55,8 +55,17 @@ func TestVersionPrintsToStdoutAndExitsZero(t *testing.T) {
 	if code := run([]string{"--version"}, strings.NewReader(""), stdout, stderr, "", ""); code != 0 {
 		t.Errorf("exit = %d, want 0", code)
 	}
-	if !strings.Contains(stdout.String(), "skulk") {
-		t.Errorf("stdout = %q", stdout.String())
+
+	// Tied to the variable rather than to the word "skulk": Version is what
+	// -ldflags overwrites at release time, and a check that only looked for the
+	// project name would pass forever on 0.0.0-dev.
+	//
+	// This cannot catch the failure that matters most — `-X` naming a symbol
+	// that no longer exists is silently a no-op, and no Go test can see that
+	// from inside the package. ci.yml builds with a sentinel and asserts the
+	// binary reports it.
+	if got, want := strings.TrimSpace(stdout.String()), "skulk "+Version; got != want {
+		t.Errorf("stdout = %q, want %q", got, want)
 	}
 }
 
