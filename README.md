@@ -60,7 +60,7 @@ deployment looks like and what it does not protect you from.
 On macOS, from the tap:
 
 ```console
-$ brew install --cask roeeyn/tap/skulk
+$ brew install --cask roeeyn/tools/skulk
 ```
 
 That auto-taps, so there is no separate `brew tap` step. Once tapped,
