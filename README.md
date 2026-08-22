@@ -60,8 +60,11 @@ deployment looks like and what it does not protect you from.
 On macOS, from the tap:
 
 ```console
-$ brew install --cask roeeyn/skulk/skulk
+$ brew install --cask roeeyn/tap/skulk
 ```
+
+That auto-taps, so there is no separate `brew tap` step. Once tapped,
+`brew upgrade --cask skulk` is enough.
 
 macOS only for now, Apple Silicon and Intel. The binaries are **unsigned and
 unnotarized** — the cask clears Gatekeeper's quarantine flag on install, which is

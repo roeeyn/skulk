@@ -101,9 +101,13 @@ homebrew_casks:
 
     # `homebrew_casks`, not `brews`: the formula stanza is deprecated, and a cask
     # is what carries the quarantine hook below.
+    # A GENERAL tap, not one repository per tool: roeeyn/homebrew-tap holds the
+    # cask for skulk and for whatever comes next. Homebrew strips the
+    # `homebrew-` prefix, so the repo `roeeyn/homebrew-tap` is tapped as
+    # `roeeyn/tap` and installed from as `roeeyn/tap/skulk`.
     repository:
       owner: roeeyn
-      name: homebrew-skulk
+      name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     directory: Casks
 
