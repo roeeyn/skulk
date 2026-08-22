@@ -43,10 +43,10 @@ $ curl http://localhost:4000/healthz
 {"protocol_version":0,"status":"ok"}
 ```
 
-Or from the container image, if you would rather not install Elixir:
+Or from the published image, if you would rather not install Elixir at all:
 
 ```console
-$ docker build -t skulkd . && docker run --rm -p 4000:4000 skulkd
+$ docker run --rm -p 4000:4000 ghcr.io/roeeyn/skulkd:latest
 ```
 
 Either way this relay is local. Running one **that other people can reach** means TLS in

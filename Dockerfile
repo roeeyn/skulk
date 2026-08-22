@@ -18,8 +18,16 @@
 # other way round — a binary built against newer glibc than it runs on does not
 # start.
 #
-# `--build-arg` overrides either, which is how ROJ-53 will rebuild on a base
-# image CVE without touching this file.
+# `--build-arg` overrides either, which is how a base image CVE gets rebuilt
+# without touching this file.
+#
+# BUILD IT NATIVELY. Cross-building this image under emulation — `docker build
+# --platform linux/amd64` on an Apple Silicon machine, say — fails reproducibly
+# in `mix deps.compile` with "could not call Module.put_attribute/3 because the
+# module MIME.Mixfile is already compiled". Elixir's parallel compiler does not
+# survive QEMU's timing. Native amd64 and native arm64 both build and boot
+# cleanly, which is why .github/workflows/release.yml gives each architecture its
+# own runner instead of emulating one from the other.
 #
 # WHY TRIXIE. Debian handed bookworm to the LTS team on 12 July 2026, three years
 # after its release — still patched until June 2028, but by a different team under
@@ -114,6 +122,24 @@ EXPOSE 4000
 # /healthz is unauthenticated and says nothing about any room — see §18.1.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
     CMD curl -fsS http://127.0.0.1:4000/healthz || exit 1
+
+# Last, so that changing a version does not invalidate anything above it.
+#
+# `source` is the one that does real work: it is what links the GHCR package page
+# back to this repository, so a person looking at the image can reach the code,
+# the threat model and the specification. `description` carries the honesty notice
+# onto that page, because the package listing is a surface where somebody meets
+# this project without having seen the README first — and §27's rule survives
+# every edit until end-to-end encryption ships, including onto new surfaces.
+ARG VERSION=0.0.0-dev
+ARG REVISION=unknown
+LABEL org.opencontainers.image.title="skulkd" \
+      org.opencontainers.image.description="Relay for skulk, a terminal group chat for humans and AI agents. Experimental and unaudited: messages are NOT end-to-end encrypted yet and this relay can read every one of them." \
+      org.opencontainers.image.source="https://github.com/roeeyn/skulk" \
+      org.opencontainers.image.documentation="https://github.com/roeeyn/skulk/blob/main/docs/self-hosting.md" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${REVISION}"
 
 ENTRYPOINT ["/app/bin/skulkd"]
 CMD ["start"]

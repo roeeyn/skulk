@@ -179,6 +179,13 @@ tasks:
       - mix deps.audit
       - mix licenses.check
 
+  image:
+    desc: Build the relay image for THIS machine and prove it boots
+    cmds:
+      # The same script both release jobs run, minus --push. Cross-building for
+      # another architecture is not offered on purpose — see the Dockerfile.
+      - .github/scripts/build-relay-image.sh "linux/{{ARCH}}" skulkd 0.0.0-dev "$(git rev-parse HEAD)"
+
   clean:
     desc: Remove build output
     cmds:

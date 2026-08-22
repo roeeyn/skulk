@@ -3,8 +3,10 @@ name: CI
 # The fast loop: relay tests, client tests, the integration lane, and §22.3's
 # dependency checks, on every push to main and every PR. Also builds the relay
 # image and checks it answers, because a Dockerfile nobody builds is a document
-# rather than a deliverable. Cross-platform client builds and release artifacts
-# are M1.5 (ROJ-52, ROJ-53) and not here yet.
+# rather than a deliverable — note it is BUILT here and never pushed, which is
+# what keeps `latest` meaning the last release rather than the last commit.
+# Publishing lives in release.yml, on tag. Cross-platform client builds are
+# M1.5 (ROJ-52) and not here yet.
 # Target: under 5 minutes — every job runs in parallel except integration.
 on:
   push:
