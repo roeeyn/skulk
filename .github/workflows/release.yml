@@ -34,7 +34,7 @@ jobs:
   # back.
   #
   # NEEDS A SECRET the repository does not have by default: HOMEBREW_TAP_TOKEN, a
-  # fine-grained PAT with Contents: read and write on roeeyn/homebrew-tap.
+  # fine-grained PAT with Contents: read and write on roeeyn/homebrew-tools.
   # GITHUB_TOKEN is scoped to THIS repository and cannot push to another one.
   #
   # That token EXPIRES. When a release fails at the cask step with a 401 or 403,
