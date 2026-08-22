@@ -59,6 +59,51 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
+      # goreleaser publishes the GitHub release BEFORE it pushes the cask, so a
+      # token that cannot write to the tap fails AFTER the release is public —
+      # leaving binaries people can download and a `brew install` still pointing
+      # at the previous version, with the tag already burnt.
+      #
+      # Three things go wrong here, and all three are invisible until they are
+      # expensive: the secret is missing, the fine-grained PAT has expired, or
+      # the tap repository is ARCHIVED and therefore read-only. The last one is
+      # not hypothetical — it is the state roeeyn/homebrew-tools was in when this
+      # job was written.
+      #
+      # Runs on the manual dispatch too: rehearsing a release without checking
+      # the thing most likely to break is not a rehearsal.
+      - name: The tap token can actually write to the tap
+        env:
+          TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$TOKEN" ]; then
+            echo "::error::HOMEBREW_TAP_TOKEN is not set. It is a fine-grained PAT with Contents: read and write on roeeyn/homebrew-tools."
+            exit 1
+          fi
+
+          if ! tap="$(curl -fsS -H "Authorization: Bearer $TOKEN" \
+                        https://api.github.com/repos/roeeyn/homebrew-tools)"; then
+            echo "::error::HOMEBREW_TAP_TOKEN cannot read roeeyn/homebrew-tools — expired, revoked, or scoped to the wrong repository."
+            exit 1
+          fi
+
+          if [ "$(jq -r .archived <<<"$tap")" = "true" ]; then
+            echo "::error::roeeyn/homebrew-tools is ARCHIVED, which makes it read-only. Settings -> Danger Zone -> Unarchive this repository."
+            exit 1
+          fi
+
+          # Only an explicit false is a failure. A null here means the API did not
+          # report permissions rather than that there are none, and guessing would
+          # block a release that would have worked.
+          if [ "$(jq -r '.permissions.push' <<<"$tap")" = "false" ]; then
+            echo "::error::HOMEBREW_TAP_TOKEN reaches roeeyn/homebrew-tools but cannot write to it. It needs Contents: read and write."
+            exit 1
+          fi
+
+          echo "tap is writable"
+
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: "~> v2"
