@@ -73,31 +73,59 @@ $ ./bin/skulk create --server ws://localhost:4000/v1/ws
 
 `task relay` does the same thing, and `task relay PORT=4001` runs a second one.
 
-## 2. Locally, from the image
+## 2. From the published image
+
+No toolchain at all:
 
 ```console
-$ docker build -t skulkd .
-$ docker run --rm -p 4000:4000 skulkd
+$ docker run --rm -p 4000:4000 ghcr.io/roeeyn/skulkd:latest
 ```
 
 Same `/healthz`, same `--server ws://localhost:4000/v1/ws`. The image runs as an
-unprivileged user, carries no shell toolchain, and has Erlang distribution switched off.
+unprivileged user, carries no shell toolchain, has Erlang distribution switched off, and
+ships with §8's defaults and nothing else — no credentials, no baked configuration, and no
+default relay address.
+
+`linux/amd64` and `linux/arm64`, so an Apple Silicon machine pulls a native image rather
+than emulating one. Both architectures are booted and health-checked by the release
+workflow before either is published.
+
+**Which tag to pull.** `:latest` follows stable releases only — a prerelease such as
+`v0.2.0-rc1` publishes under its own version tag and deliberately does not move `:latest`.
+Pin the version when you care:
+
+```console
+$ docker run --rm -p 4000:4000 ghcr.io/roeeyn/skulkd:0.1.0
+```
+
+**Pin it in particular once M2 lands**, when the protocol version bumps. Relay and client
+have to move together, and `unsupported_protocol_version` on a closed connection is what a
+mismatch looks like.
 
 To change bounds, copy the example configuration and pass it in:
 
 ```console
-$ cp skulkd/skulkd.env.example skulkd.env
-$ $EDITOR skulkd.env
-$ docker run --rm -p 4000:4000 --env-file skulkd.env skulkd
+$ curl -O https://raw.githubusercontent.com/roeeyn/skulk/main/skulkd/skulkd.env.example
+$ cp skulkd.env.example skulkd.env && $EDITOR skulkd.env
+$ docker run --rm -p 4000:4000 --env-file skulkd.env ghcr.io/roeeyn/skulkd:latest
 ```
+
+Building it yourself works too, and is what CI does on every pull request:
+
+```console
+$ docker build -t skulkd . && docker run --rm -p 4000:4000 skulkd
+```
+
+Build it for **your own** architecture. Cross-building under emulation fails
+reproducibly in Elixir's parallel compiler — the Dockerfile says where and why. If you
+want the other architecture, pull it rather than emulate it.
 
 `docker compose`, if you prefer it:
 
 ```yaml
 services:
   skulkd:
-    image: skulkd
-    build: .
+    image: ghcr.io/roeeyn/skulkd:latest
     restart: unless-stopped
     # Loopback only. The reverse proxy on this host reaches it; nothing else does.
     # Drop the `127.0.0.1:` prefix ONLY if you mean to expose it directly, and read
@@ -278,5 +306,7 @@ every room is gone, and the clients will say so.
 refused with `unsupported_protocol_version` — which looks like the application being
 broken and is in fact the protocol working. **M2 and M3 are protocol version bumps**, so
 when they land, relay and clients have to move together. Keep the image tag and the client
-version in step; that lockstep is the reason this milestone exists at all
+version in step — they are published from the same tag, by the same workflow, from the
+same commit, which is what makes "we are both on 0.4.0" a diagnosis somebody can actually
+perform. That lockstep is the reason this milestone exists at all
 ([entry #1 in `docs/deviations.md`](deviations.md)).
