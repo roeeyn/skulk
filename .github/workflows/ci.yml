@@ -204,15 +204,30 @@ jobs:
   # listening on the configured address, and the plug pipeline answers — which is
   # everything the image is responsible for. What runs BEHIND that endpoint is the
   # relay and integration suites' job, not this one's.
+  #
+  # arm64, because that is the only architecture release.yml publishes — an image
+  # job that tested a platform nobody runs would be worse than none.
   image:
     name: image · the relay builds and answers
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
 
+      - uses: docker/setup-buildx-action@v3
+
       - name: docker build
-        run: docker build -t skulkd:ci .
+        uses: docker/build-push-action@v6
+        with:
+          load: true
+          tags: skulkd:ci
+          platforms: linux/arm64
+          cache-from: type=gha
+          # Written only from main. GitHub scopes caches by branch, so a release
+          # tag reads what main produced and nothing a pull request wrote — which
+          # is both the security property and the reason a PR writing here would
+          # be wasted space.
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max' || '' }}
 
       - name: The image boots and /healthz answers
         run: |
@@ -237,6 +252,19 @@ jobs:
           user="$(docker exec skulkd-ci id -un)"
           echo "running as: $user"
           [ "$user" = "skulkd" ] || { echo "::error::expected user skulkd, got $user"; exit 1; }
+
+      # The relay holds no keys and issues no credentials, so its image has no
+      # reason to carry an environment variable that looks like one — nor a
+      # default relay address, which A10 refuses to ship precisely because a
+      # one-liner installer beside an unauthenticated relay advertises it.
+      - name: It carries no credentials and no default relay address
+        run: |
+          if docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' skulkd:ci \
+             | grep -Ei '^(SKULK_SERVER|.*(PASSWORD|PASSPHRASE|SECRET|TOKEN|CREDENTIAL|API_?KEY).*)=' ; then
+            echo "::error::the image ships an environment variable it should not"
+            exit 1
+          fi
+          echo "clean"
 
   # ---------------------------------------------------------------------------
   # ExUnit drives everything (design A14): the relay boots in-process and real
