@@ -55,11 +55,28 @@ front of it and a few decisions you should make deliberately —
 [**docs/self-hosting.md**](docs/self-hosting.md) covers those, including what a `wss://`
 deployment looks like and what it does not protect you from.
 
-### 2. Build the client
+### 2. Get the client
+
+On macOS, from the tap:
 
 ```console
-$ go build -o bin/skulk ./cmd/skulk
+$ brew install --cask roeeyn/skulk/skulk
 ```
+
+macOS only for now, Apple Silicon and Intel. The binaries are **unsigned and
+unnotarized** — the cask clears Gatekeeper's quarantine flag on install, which is
+goreleaser's documented answer for an unsigned cask and is worth knowing you are
+accepting. Signing needs an Apple Developer account, and that is a decision for
+whenever skulk stops being an experiment.
+
+Anywhere else, or to work on it:
+
+```console
+$ go build -o bin/skulk ./cmd/skulk    # or: task build
+```
+
+`task build` stamps the binary with `git describe`, so `skulk --version` tells you
+which commit you are running rather than `0.0.0-dev`.
 
 ### 3. Create a room
 
@@ -186,6 +203,7 @@ decrypts, and the `message` event still carries plain `text`.
 | Path | What |
 | --- | --- |
 | `cmd/skulk/`, `internal/` | Go client: bubbletea TUI and `--headless` mode |
+| `.goreleaser.yaml` | client release: macOS binaries, the GitHub release, the Homebrew cask |
 | `skulkd/` | Elixir relay — Bandit + WebSock, one GenServer per room, no Phoenix |
 | [`docs/spec/`](docs/spec/terminal_chat_mvp_spec.md) | the specification, v1.1 — **the implementation authority** |
 | [`docs/protocol-v0.md`](docs/protocol-v0.md) | the M0 wire protocol: frames, limits, validation order |

@@ -20,3 +20,4 @@ skulkd/.elixir_ls/
 # OS / editor
 .DS_Store
 *.swp
+dist/

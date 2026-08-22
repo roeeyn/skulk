@@ -86,6 +86,12 @@ tasks:
 
   build:
     desc: Build the client to bin/skulk
+    vars:
+      # So a locally built client answers `--version` with something that
+      # identifies it — `v0.1.0-3-gabc1234-dirty` rather than the 0.0.0-dev every
+      # binary reported before ROJ-52. Falls back to the sha before the first tag.
+      VERSION:
+        sh: git describe --tags --always --dirty 2>/dev/null || echo 0.0.0-dev
     sources:
       - "**/*.go"
       - "*.go"
@@ -94,7 +100,7 @@ tasks:
     generates:
       - "{{.CLIENT}}"
     cmds:
-      - go build -o {{.CLIENT}} ./cmd/skulk
+      - go build -ldflags "-X main.Version={{.VERSION}}" -o {{.CLIENT}} ./cmd/skulk
 
   deps:
     desc: Fetch the relay's Elixir dependencies

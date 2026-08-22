@@ -1,0 +1,145 @@
+# Releases the skulk CLIENT. The relay ships as a container image from the same
+# tag — see .github/workflows/release.yml.
+#
+# One tag produces both, from the same commit, which is the whole point: M2 and
+# M3 are protocol bumps, and a stale client against a new relay gets
+# `unsupported_protocol_version` and a closed connection — the protocol working
+# correctly, looking exactly like the app being broken.
+#
+#     goreleaser check                 # validate this file
+#     goreleaser build --snapshot --clean   # build without releasing anything
+version: 2
+
+project_name: skulk
+
+builds:
+  - id: skulk
+    main: ./cmd/skulk
+    binary: skulk
+
+    # macOS only, for now. The dogfood target is MacBooks on Tahoe or newer, and
+    # Tahoe is the last macOS to run on Intel — hence both architectures. Adding
+    # `linux` here is one word and produces two more archives; it is left out
+    # because nobody is asking for it yet, not because it is hard.
+    #
+    # Windows stays out until M5, where §23 asks for it.
+    goos: [darwin]
+    goarch: [arm64, amd64]
+
+    # The client holds no keys and links no C library, so there is nothing for
+    # cgo to do — and without it a Linux runner can cross-compile both macOS
+    # binaries, which is why this whole job costs seconds.
+    env:
+      - CGO_ENABLED=0
+
+    flags:
+      - -trimpath
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+    # THE POINT OF THIS FILE. `var Version` in cmd/skulk/main.go has read
+    # "0.0.0-dev" in every binary ever produced, including any handed to another
+    # person. `--version` is the first thing anyone asks a dogfooder for.
+    #
+    # Go does not warn when `-X` names a symbol that does not exist, so renaming
+    # or moving that variable would silently return every build to 0.0.0-dev.
+    # ci.yml builds with a sentinel version and asserts the binary reports it.
+    ldflags:
+      - -s -w -X main.Version={{ .Version }}
+
+archives:
+  - ids: [skulk]
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot"
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - "^chore:"
+
+release:
+  github:
+    owner: roeeyn
+    name: skulk
+
+  # A tag containing a hyphen (v0.1.0-rc1) is marked a prerelease, which is the
+  # same rule that keeps the relay image's `latest` off release candidates.
+  prerelease: auto
+
+  # A release page is a surface where somebody meets this project without having
+  # read the README, and §27's rule survives onto new surfaces: until end-to-end
+  # encryption ships, every place that offers skulk says what it does not do.
+  header: |
+    ## skulk {{ .Tag }}
+
+    > **Not encrypted yet.** Messages are NOT end-to-end encrypted — the relay
+    > receives and stores your message text and can read every word of it. There
+    > is no rate limiting, by design. skulk is experimental, unaudited, and
+    > unsuitable for anything you would mind a stranger reading.
+    >
+    > [SECURITY.md](https://github.com/roeeyn/skulk/blob/main/SECURITY.md) is the
+    > threat model in full.
+
+    Relay image for this release:
+    `ghcr.io/roeeyn/skulkd:{{ .Version }}`
+
+    Client and relay are built from this same commit and must move together — a
+    version mismatch surfaces as `unsupported_protocol_version`.
+
+homebrew_casks:
+  - name: skulk
+
+    # `homebrew_casks`, not `brews`: the formula stanza is deprecated, and a cask
+    # is what carries the quarantine hook below.
+    repository:
+      owner: roeeyn
+      name: homebrew-skulk
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Casks
+
+    binaries: [skulk]
+    homepage: https://github.com/roeeyn/skulk
+    description: Terminal group chat for humans and AI agents. Experimental, unaudited, and not yet end-to-end encrypted.
+
+    # Helps `brew audit` when the homepage and the download host differ.
+    url:
+      verified: github.com/roeeyn/skulk
+
+    # A release candidate should not become what `brew install` hands people.
+    skip_upload: auto
+
+    # These binaries are UNSIGNED and UNNOTARIZED. Homebrew casks set the
+    # quarantine attribute on what they download, so without this Gatekeeper
+    # refuses to run it and the error message blames the binary rather than the
+    # signature. This is goreleaser's own documented answer for unsigned casks.
+    #
+    # It is not a security bypass so much as an honest one: the user already
+    # chose to install from this tap. Signing properly needs an Apple Developer
+    # account, and that is a decision for whenever skulk stops being an
+    # experiment.
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/skulk"]
+          end
+
+    caveats: |
+      skulk needs a relay, and there is no default one — you must pass --server.
+
+        skulk create --server wss://your-relay.example.com/v1/ws
+
+      Run your own in about a minute:
+        https://github.com/roeeyn/skulk/blob/main/docs/self-hosting.md
+
+      The relay can read every message. That changes at milestone M3, not before.
