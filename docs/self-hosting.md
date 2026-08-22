@@ -86,9 +86,10 @@ unprivileged user, carries no shell toolchain, has Erlang distribution switched 
 ships with §8's defaults and nothing else — no credentials, no baked configuration, and no
 default relay address.
 
-`linux/amd64` and `linux/arm64`, so an Apple Silicon machine pulls a native image rather
-than emulating one. Both architectures are booted and health-checked by the release
-workflow before either is published.
+**`linux/arm64` only, for now.** The published image targets Apple Silicon Macs, where
+Docker runs an arm64 Linux VM — so this is the native one there and no emulation is
+involved. On an amd64 host (most VPS instances) it will not run: build it yourself with
+the one-liner further down, which is a single native command on that machine.
 
 **Which tag to pull.** `:latest` follows stable releases only — a prerelease such as
 `v0.2.0-rc1` publishes under its own version tag and deliberately does not move `:latest`.
@@ -116,9 +117,10 @@ Building it yourself works too, and is what CI does on every pull request:
 $ docker build -t skulkd . && docker run --rm -p 4000:4000 skulkd
 ```
 
-Build it for **your own** architecture. Cross-building under emulation fails
-reproducibly in Elixir's parallel compiler — the Dockerfile says where and why. If you
-want the other architecture, pull it rather than emulate it.
+Build it for **your own** architecture, which is what that command does. Cross-building
+under emulation fails reproducibly in Elixir's parallel compiler — the Dockerfile says
+where and why — so `--platform` pointed at anything other than the machine you are on will
+not work. `task image` builds and health-checks it in one step.
 
 `docker compose`, if you prefer it:
 

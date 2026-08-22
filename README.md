@@ -43,7 +43,8 @@ $ curl http://localhost:4000/healthz
 {"protocol_version":0,"status":"ok"}
 ```
 
-Or from the published image, if you would rather not install Elixir at all:
+Or from the published image, if you would rather not install Elixir at all. It is
+`linux/arm64` only for now — Apple Silicon runs it natively; elsewhere, build it:
 
 ```console
 $ docker run --rm -p 4000:4000 ghcr.io/roeeyn/skulkd:latest

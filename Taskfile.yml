@@ -180,11 +180,24 @@ tasks:
       - mix licenses.check
 
   image:
-    desc: Build the relay image for THIS machine and prove it boots
+    desc: Build the relay image for THIS machine and check it answers
     cmds:
-      # The same script both release jobs run, minus --push. Cross-building for
-      # another architecture is not offered on purpose — see the Dockerfile.
-      - .github/scripts/build-relay-image.sh "linux/{{ARCH}}" skulkd 0.0.0-dev "$(git rev-parse HEAD)"
+      # Natively, for whatever this machine is. Cross-building is not offered on
+      # purpose — see the Dockerfile.
+      - docker build -t skulkd:local --build-arg REVISION="$(git rev-parse HEAD)" .
+      - |
+        set -e
+        docker rm -f skulkd-local >/dev/null 2>&1 || true
+        docker run -d --name skulkd-local -p 127.0.0.1::4000 skulkd:local >/dev/null
+        trap 'docker rm -f skulkd-local >/dev/null 2>&1 || true' EXIT
+        address="$(docker port skulkd-local 4000/tcp | head -1)"
+        for _ in $(seq 1 30); do
+          curl -fs --max-time 2 "http://${address}/healthz" && { echo; exit 0; }
+          sleep 1
+        done
+        echo "the image never answered /healthz within 30s" >&2
+        docker logs skulkd-local >&2
+        exit 1
 
   clean:
     desc: Remove build output

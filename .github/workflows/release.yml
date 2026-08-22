@@ -1,142 +1,55 @@
 name: Release
 
-# A tag publishes the relay image. Nothing else does — pushes to main build the
-# image in ci.yml and throw it away, which is what keeps `latest` meaning "the
-# last release" rather than "the last commit".
+# A tag publishes the relay image. Nothing else does — ci.yml builds the image on
+# every PR and throws it away, which is what keeps `latest` meaning the last
+# RELEASE rather than the last commit.
 #
-# ROJ-52 will add the client's release to this file, on the same trigger, so one
-# tag produces a client and a relay built from the same commit. That pairing is
-# the point: M2 and M3 are protocol bumps, and a stale client against a new relay
-# gets `unsupported_protocol_version` and a closed connection — the protocol
-# working correctly, looking exactly like the app being broken.
+# ROJ-52 will add the client's release here, on the same trigger, so one tag
+# produces a client and a relay built from the same commit. That pairing is the
+# point: M2 and M3 are protocol bumps, and a stale client against a new relay gets
+# `unsupported_protocol_version` and a closed connection — the protocol working
+# correctly, looking exactly like the app being broken.
 on:
   push:
     tags: ["v*"]
-  # A dry run, because a tag cannot be taken back and this pipeline's riskiest
-  # step — push by digest, then assemble a manifest from two jobs — cannot be
-  # rehearsed any other way. With `push` left false it builds and boots both
-  # architectures and publishes nothing.
-  #
-  # With `push` true it goes all the way to GHCR under version `0.0.0-dryrun`.
-  # That version contains a hyphen, so the prerelease rule below refuses to move
-  # `:latest` onto it — the same rule that protects a real release candidate is
-  # what makes the rehearsal safe. Delete the package version afterwards.
+  # Publishes as 0.0.0-dryrun, which contains a hyphen and so can never become
+  # `latest` under the rule below. For rehearsing a release before tagging one,
+  # since a tag cannot be taken back. Delete the package version afterwards.
   workflow_dispatch:
-    inputs:
-      push:
-        description: "Publish to GHCR as 0.0.0-dryrun"
-        type: boolean
-        default: false
 
-# Never cancel a release in flight. A half-pushed manifest is worse than a slow one.
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
-
-env:
-  IMAGE: ghcr.io/roeeyn/skulkd
 
 permissions:
   contents: read
   packages: write
 
 jobs:
-  # ---------------------------------------------------------------------------
-  # Two named jobs rather than a matrix. Matrix legs share one `outputs` context
-  # and overwrite each other's values, which is why the usual multi-arch recipe
-  # passes digests through uploaded artifacts. With exactly two known platforms,
-  # two jobs and two named outputs are less machinery and more readable.
-  #
-  # Each builds NATIVELY on its own architecture. The alternative — QEMU on one
-  # runner — would emulate a full Elixir dependency compile plus a C NIF, which
-  # is the worst possible workload to put under emulation.
-  amd64:
-    name: build · linux/amd64
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    outputs:
-      digest: ${{ steps.build.outputs.digest }}
-    steps:
-      - uses: actions/checkout@v7
-
-      # push-by-digest needs the container driver; the default `docker` driver
-      # cannot do it.
-      - name: buildx, container driver
-        run: docker buildx create --driver docker-container --use
-
-      - name: Log in to GHCR
-        if: github.event_name == 'push' || inputs.push
-        env:
-          TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: echo "$TOKEN" | docker login ghcr.io -u "${{ github.repository_owner }}" --password-stdin
-
-      - name: Build it, boot it, push it by digest
-        id: build
-        env:
-          DISPATCH_PUSH: ${{ inputs.push }}
-        run: |
-          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
-            version="${GITHUB_REF_NAME#v}"
-            push="--push"
-          else
-            version="0.0.0-dryrun"
-            [ "$DISPATCH_PUSH" = "true" ] && push="--push" || push=""
-          fi
-          .github/scripts/build-relay-image.sh linux/amd64 "$IMAGE" "$version" "$GITHUB_SHA" $push
-
-  arm64:
-    name: build · linux/arm64
-    # arm64 standard runners reached private repositories on all plans in January
-    # 2026. Before that this job would have needed a paid plan or emulation.
+  publish:
+    name: publish · ghcr.io/roeeyn/skulkd
+    # linux/arm64 ONLY, and this runner builds it natively.
+    #
+    # The relay is for Apple Silicon MacBooks right now, and Docker there runs an
+    # arm64 Linux VM — so amd64 would be the emulated one on every machine that
+    # matters. Adding amd64 back means a second job pushing by digest and a
+    # manifest merge, because this project cannot be cross-built under QEMU: see
+    # the Dockerfile.
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
-    outputs:
-      digest: ${{ steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@v7
 
-      - name: buildx, container driver
-        run: docker buildx create --driver docker-container --use
+      - uses: docker/setup-buildx-action@v3
 
-      - name: Log in to GHCR
-        if: github.event_name == 'push' || inputs.push
-        env:
-          TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: echo "$TOKEN" | docker login ghcr.io -u "${{ github.repository_owner }}" --password-stdin
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build it, boot it, push it by digest
-        id: build
-        env:
-          DISPATCH_PUSH: ${{ inputs.push }}
-        run: |
-          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
-            version="${GITHUB_REF_NAME#v}"
-            push="--push"
-          else
-            version="0.0.0-dryrun"
-            [ "$DISPATCH_PUSH" = "true" ] && push="--push" || push=""
-          fi
-          .github/scripts/build-relay-image.sh linux/arm64 "$IMAGE" "$version" "$GITHUB_SHA" $push
-
-  # ---------------------------------------------------------------------------
-  # One manifest list pointing at the two digests, so `docker pull` on either
-  # architecture gets the right image without anybody choosing.
-  publish:
-    name: publish · the multi-arch manifest
-    needs: [amd64, arm64]
-    if: github.event_name == 'push' || inputs.push
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - name: Log in to GHCR
-        env:
-          TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: echo "$TOKEN" | docker login ghcr.io -u "${{ github.repository_owner }}" --password-stdin
-
-      - name: Assemble and push the manifest
-        env:
-          AMD64: ${{ needs.amd64.outputs.digest }}
-          ARM64: ${{ needs.arm64.outputs.digest }}
+      - name: Work out the version and which tags it gets
+        id: meta
         run: |
           set -euo pipefail
           if [ "$GITHUB_EVENT_NAME" = "push" ]; then
@@ -144,28 +57,33 @@ jobs:
           else
             version="0.0.0-dryrun"
           fi
-          tags=(--tag "$IMAGE:$version")
+
+          tags="ghcr.io/roeeyn/skulkd:$version"
 
           # `latest` follows stable releases only. Semver spells a prerelease with
-          # a hyphen (v0.1.0-rc1), and pointing `latest` at a release candidate
-          # would hand it to everyone who typed no tag at all.
+          # a hyphen, and pointing `latest` at a release candidate would hand it to
+          # everyone who typed no tag at all.
           case "$version" in
             *-*) echo "prerelease $version — leaving :latest where it is" ;;
-            *)   tags+=(--tag "$IMAGE:latest") ;;
+            *)   tags="$tags,ghcr.io/roeeyn/skulkd:latest" ;;
           esac
 
-          docker buildx imagetools create "${tags[@]}" \
-            "$IMAGE@$AMD64" \
-            "$IMAGE@$ARM64"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+          echo "publishing: $tags"
 
-      - name: What was published
-        run: |
-          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
-            version="${GITHUB_REF_NAME#v}"
-          else
-            version="0.0.0-dryrun"
-          fi
-          docker buildx imagetools inspect "$IMAGE:$version"
+      - uses: docker/build-push-action@v6
+        with:
+          push: true
+          platforms: linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+            REVISION=${{ github.sha }}
+          # ci.yml writes this cache on every push to main, so a release from main
+          # is mostly an export rather than a full Elixir dependency compile.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Package visibility is a manual step, once
         run: |
