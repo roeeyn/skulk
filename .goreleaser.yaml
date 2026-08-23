@@ -18,9 +18,17 @@ builds:
     binary: skulk
 
     # macOS only, for now. The dogfood target is MacBooks on Tahoe or newer, and
-    # Tahoe is the last macOS to run on Intel — hence both architectures. Adding
-    # `linux` here is one word and produces two more archives; it is left out
-    # because nobody is asking for it yet, not because it is hard.
+    # Tahoe is the last macOS to run on Intel — hence both architectures.
+    #
+    # Adding `linux` here is one word and produces two more archives, but it does
+    # NOT produce a `brew install` for Linux. Homebrew casks are macOS-only, and
+    # the cask below is the only install path this file publishes — so a Linux
+    # archive would sit on the release page with nothing pointing at it. Serving
+    # Linux properly means a SECOND channel: a formula alongside the cask, or
+    # telling people to fetch the tarball. It is a distribution decision, not a
+    # build flag.
+    #
+    # Left out because nobody is asking for it yet.
     #
     # Windows stays out until M5, where §23 asks for it.
     goos: [darwin]
@@ -99,8 +107,12 @@ release:
 homebrew_casks:
   - name: skulk
 
-    # `homebrew_casks`, not `brews`: the formula stanza is deprecated, and a cask
-    # is what carries the quarantine hook below.
+    # `homebrew_casks`, not `brews`: goreleaser deprecated its formula stanza in
+    # v2.10 (firm in v2.16) because a formula that installs a PREBUILT binary was
+    # always a hack — formulae describe a build. Homebrew formulae themselves are
+    # alive and well; it is this use of them that went away. A cask is also what
+    # carries the quarantine hook below.
+    #
     # The EXISTING general tap — "Common tools distributed via homebrew", created
     # 2022 — rather than a new repository per tool. Homebrew strips the
     # `homebrew-` prefix, so `roeeyn/homebrew-tools` is tapped as `roeeyn/tools`
