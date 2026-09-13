@@ -130,11 +130,12 @@ homebrew_casks:
 
     binaries: [skulk]
     homepage: https://github.com/roeeyn/skulk
-    description: Terminal group chat for humans and AI agents. Experimental, unaudited, and not yet end-to-end encrypted.
-
-    # Helps `brew audit` when the homepage and the download host differ.
-    url:
-      verified: github.com/roeeyn/skulk
+    # Under 80 characters and no full stop, because `brew style` enforces both
+    # and flagged the old 104-character version. The description keeps the §27
+    # half — a surface that offers skulk says what it does not do — and the
+    # "experimental, unaudited" half moved to `caveats` below, which
+    # `brew install` prints. Moved, not dropped.
+    description: Terminal group chat for humans and AI agents; not end-to-end encrypted
 
     # A release candidate should not become what `brew install` hands people.
     skip_upload: auto
@@ -148,12 +149,34 @@ homebrew_casks:
     # chose to install from this tap. Signing properly needs an Apple Developer
     # account, and that is a decision for whenever skulk stops being an
     # experiment.
-    hooks:
-      post:
-        install: |
-          if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/skulk"]
-          end
+    #
+    # Written through `custom_block`, not `hooks.post.install`. The hook makes
+    # goreleaser write `postflight do`, which Homebrew has deprecated: every
+    # `brew update` warned about it, and Homebrew's policy is to turn a
+    # deprecated stanza into a hard error at its next minor release — after
+    # which the cask stops loading and `brew install` breaks. `custom_block` is
+    # copied into the cask as written, so it can carry the replacement,
+    # `postflight_steps`.
+    #
+    # `{{ "{{staged_path}}" }}` is not a typo. goreleaser renders this block as
+    # a template, and that expression comes out as Homebrew's literal
+    # `{{staged_path}}` token, which Homebrew expands at install time.
+    #
+    # Two costs. goreleaser puts `custom_block` at the TOP of the cask, so
+    # `brew style` reports the stanzas as out of order — lint only, installs are
+    # unaffected. And lint cannot tell whether this works: after a release,
+    # `xattr -l` on the installed binary should show no com.apple.quarantine,
+    # and `skulk --version` should run.
+    #
+    # goreleaser/goreleaser#6873 adds `hooks.post.install_steps`, which writes
+    # this stanza in its proper place. Once the release job gets a goreleaser
+    # with it, move this there and delete `custom_block` (ROJ-92).
+    custom_block: |
+      postflight_steps do
+        on_macos do
+          run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ "{{staged_path}}" }}/skulk"]
+        end
+      end
 
     caveats: |
       skulk needs a relay, and there is no default one — you must pass --server.
@@ -164,3 +187,4 @@ homebrew_casks:
         https://github.com/roeeyn/skulk/blob/main/docs/self-hosting.md
 
       The relay can read every message. That changes at milestone M3, not before.
+      skulk is experimental and unaudited.
